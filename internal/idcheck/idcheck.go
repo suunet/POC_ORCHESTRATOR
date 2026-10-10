@@ -104,7 +104,8 @@ type checker struct {
 	rules    []*prefixRule
 	children map[string]map[string]bool // 親のID → 子の名前
 	defs     map[string]*definition
-	defAt    map[string]bool // 定義の位置（file:line:off）。参照として数えない
+	// defAt は定義のセルの位置。defineFromTable が書き、scanLine が読んで、定義そのものを参照として数えないようにする。
+	defAt    map[pos]bool
 	refs     map[string]int
 	files    map[string][]string
 	findings []Finding
@@ -118,7 +119,7 @@ func Run(root string, rules *Rules) (Result, error) {
 		rules:    rules.prefixes,
 		children: map[string]map[string]bool{},
 		defs:     map[string]*definition{},
-		defAt:    map[string]bool{},
+		defAt:    map[pos]bool{},
 		refs:     map[string]int{},
 		files:    map[string][]string{},
 	}
@@ -254,7 +255,7 @@ func (c *checker) defineFromTable(r *prefixRule, file string, t table) {
 		if nc, ok := row.at(nameCol); ok && nameCol >= 0 {
 			name = nc.text
 		}
-		c.defAt[posKey(file, row.line, cl.off)] = true
+		c.defAt[pos{file: file, line: row.line, off: cl.off}] = true
 		if prev, dup := c.defs[id]; dup {
 			c.add(Finding{Level: Required, Kind: KindDuplicate, ID: id, File: file, Line: row.line,
 				Message: fmt.Sprintf("%s は %s:%d でも定義されている", id, prev.file, prev.line)})
@@ -322,7 +323,7 @@ func (c *checker) scanLine(file string, lineNo int, line string) {
 			if !boundaryBefore(line, start) || !boundaryAfter(line, end) {
 				continue
 			}
-			if c.defAt[posKey(file, lineNo, start)] {
+			if c.defAt[pos{file: file, line: lineNo, off: start}] {
 				continue
 			}
 			c.recordRef(r, file, lineNo, line, line[start:end], end)
@@ -342,22 +343,36 @@ func (c *checker) recordRef(r *prefixRule, file string, lineNo int, line, id str
 		c.add(Finding{Level: Required, Kind: KindDeprecated, ID: id, File: file, Line: lineNo,
 			Message: fmt.Sprintf("%s は廃止されている（%s:%d）", id, def.file, def.line)})
 	}
-	if ch := r.cfg.Children; ch != nil && strings.HasPrefix(line[end:], ch.Separator) {
-		rest := line[end+len(ch.Separator):]
-		if name := longestPrefix(rest, c.children[id]); name != "" {
-			return // 子の参照。名前の検査は子の名前そのもので済んでいる
-		}
-		if token := leadingToken(rest); token != "" {
-			child := id + ch.Separator + token
-			c.add(Finding{Level: Required, Kind: KindUndefined, ID: child, File: file, Line: lineNo,
-				Message: fmt.Sprintf("%s は定義されていない（%s の%sにない）", child, id, ch.NameColumn)})
-			return
-		}
+	// NOTE: 検査の順序が仕様。子の参照なら、括弧を名前とみなす検査（最後）は行わない。
+	if c.checkChildRef(r, file, lineNo, line, id, end) {
+		return
 	}
 	if name, ok := parenAt(line, end); ok && def.name != "" && name != def.name {
 		c.add(Finding{Level: Recommended, Kind: KindNameMismatch, ID: id, File: file, Line: lineNo,
 			Message: fmt.Sprintf("%s の名前「%s」が正本の「%s」と違う", id, name, def.name)})
 	}
+}
+
+// checkChildRef は、line[end:] が子の区切りで始まるとき、子の参照として扱って true を返す。
+// 定義済みの子の名前のうち最も長く一致するものをとり、なければ未定義の子として指摘する。
+// 区切りの後に名前がないとき（文末の「.」など）は、子の参照とみなさない。
+func (c *checker) checkChildRef(r *prefixRule, file string, lineNo int, line, id string, end int) bool {
+	ch := r.cfg.Children
+	if ch == nil || !strings.HasPrefix(line[end:], ch.Separator) {
+		return false
+	}
+	rest := line[end+len(ch.Separator):]
+	if longestPrefix(rest, c.children[id]) != "" {
+		return true
+	}
+	token := leadingToken(rest)
+	if token == "" {
+		return false
+	}
+	child := id + ch.Separator + token
+	c.add(Finding{Level: Required, Kind: KindUndefined, ID: child, File: file, Line: lineNo,
+		Message: fmt.Sprintf("%s は定義されていない（%s の%sにない）", child, id, ch.NameColumn)})
+	return true
 }
 
 func (c *checker) reportUnreferenced() {
@@ -374,8 +389,10 @@ func (r *prefixRule) fullMatch(s string) bool {
 	return loc != nil && loc[0] == 0 && loc[1] == len(s)
 }
 
-func posKey(file string, line, off int) string {
-	return fmt.Sprintf("%s:%d:%d", file, line, off)
+// pos は、ファイルの中の位置（行は1始まり、off は行の中のバイトの位置）。
+type pos struct {
+	file      string
+	line, off int
 }
 
 // boundaryBefore は、IDの直前が英数字・下線・ハイフンでないか（別の語の一部でないか）を返す。

@@ -53,6 +53,7 @@ func parseTables(lines []string) []table {
 	}
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		// NOTE: ``` と ~~~ を区別せずに開閉を切り替える。``` で開いたコードブロックを ~~~ でも閉じられる
 		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
 			flush()
 			inFence = !inFence
@@ -96,6 +97,8 @@ func isSeparator(cells []cell) bool {
 }
 
 // splitRow は、表の1行をセルに分ける。バッククォートの中の | は区切りとみなさない。
+//
+// NOTE: バッククォートが奇数個で閉じていないと、それ以降の | は行の終わりまで区切りとみなさない。
 func splitRow(line string) []cell {
 	start := strings.Index(line, "|")
 	if start < 0 {

@@ -21,6 +21,7 @@ func FS() fs.FS {
 // Supplements は、埋め込まれた補足のファイル（案内の README.md を除く）のパスを返す。
 func Supplements() []string {
 	var out []string
+	// NOTE: embed.FS の走査はコールバックが error を返さない限り失敗しないため、戻り値は捨てる
 	_ = fs.WalkDir(files, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
