@@ -1,0 +1,10 @@
+# ビルドした実行ファイル
+/bin/
+
+# git非管理の内部資料
+CLAUDE.local.md
+/docs/plans/
+/builtins/**/supplement/*
+!/builtins/**/supplement/README.md
+/docs/policies/design.md
+/docs/policies/go-idioms.md
