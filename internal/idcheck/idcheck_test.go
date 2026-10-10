@@ -79,11 +79,20 @@ func baseFiles() map[string]string {
 func run(t *testing.T, files map[string]string) idcheck.Result {
 	t.Helper()
 	root := writeFiles(t, files)
-	res, err := idcheck.Run(root, testConfig())
+	res, err := idcheck.Run(root, mustRules(t, testConfig()))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	return res
+}
+
+func mustRules(t *testing.T, cfg config.IDs) *idcheck.Rules {
+	t.Helper()
+	rules, err := idcheck.NewRules(cfg)
+	if err != nil {
+		t.Fatalf("NewRules: %v", err)
+	}
+	return rules
 }
 
 // kinds は、指摘の種類とIDを「種類 ID」の形で並べて返す。
@@ -194,7 +203,33 @@ func TestRun_MissingFile(t *testing.T) {
 	files := baseFiles()
 	delete(files, "docs/state.md")
 	root := writeFiles(t, files)
-	if _, err := idcheck.Run(root, testConfig()); err == nil {
+	if _, err := idcheck.Run(root, mustRules(t, testConfig())); err == nil {
 		t.Fatal("定義のファイルがないのに error が返らない")
+	}
+}
+
+func TestNewRules_InvalidPattern(t *testing.T) {
+	cfg := testConfig()
+	cfg.Prefixes[0].Pattern = "ACT-(["
+	if _, err := idcheck.NewRules(cfg); err == nil || !strings.Contains(err.Error(), "ACT") {
+		t.Fatalf("err = %v, want ACT の pattern の誤り", err)
+	}
+}
+
+// 同じ Rules で検査を繰り返しても、前回の定義が持ち越されない。
+func TestRun_RulesReusable(t *testing.T) {
+	rules := mustRules(t, testConfig())
+	full := writeFiles(t, baseFiles())
+	if _, err := idcheck.Run(full, rules); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	files := baseFiles()
+	files["docs/state.md"] = "| ID | 状態モデル |\n|---|---|\n| STM-01 | 記事状態 |\n"
+	res, err := idcheck.Run(writeFiles(t, files), rules)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Children != 0 {
+		t.Errorf("Children = %d, want 0（前回の子が残っている）", res.Children)
 	}
 }

@@ -65,7 +65,12 @@ func checkIDs(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
-	res, err := idcheck.Run(*dir, *p.IDs)
+	rules, err := idcheck.NewRules(*p.IDs)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
+	res, err := idcheck.Run(*dir, rules)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitUsage

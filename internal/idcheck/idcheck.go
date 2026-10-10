@@ -74,16 +74,35 @@ type definition struct {
 	deprecated bool
 }
 
+// Rules は、検査に使える状態に検証した ID の設定。NewRules からだけ作れ、作った後は変わらない。
+type Rules struct {
+	cfg      config.IDs
+	prefixes []*prefixRule
+}
+
 type prefixRule struct {
-	cfg      config.Prefix
-	re       *regexp.Regexp
-	children map[string]map[string]bool // 親のID → 子の名前
+	cfg config.Prefix
+	re  *regexp.Regexp
+}
+
+// NewRules は、cfg の各プレフィックスの正規表現をコンパイルして Rules を作る。
+func NewRules(cfg config.IDs) (*Rules, error) {
+	rules := &Rules{cfg: cfg}
+	for _, p := range cfg.Prefixes {
+		re, err := regexp.Compile(p.Pattern)
+		if err != nil {
+			return nil, fmt.Errorf("%s の pattern が正しくない: %w", p.Prefix, err)
+		}
+		rules.prefixes = append(rules.prefixes, &prefixRule{cfg: p, re: re})
+	}
+	return rules, nil
 }
 
 type checker struct {
 	root     string
 	cfg      config.IDs
 	rules    []*prefixRule
+	children map[string]map[string]bool // 親のID → 子の名前
 	defs     map[string]*definition
 	defAt    map[string]bool // 定義の位置（file:line:off）。参照として数えない
 	refs     map[string]int
@@ -91,22 +110,17 @@ type checker struct {
 	findings []Finding
 }
 
-// Run は、root をルートとして cfg に従って検査する。設定やファイルの読み込みの誤りは error で返す。
-func Run(root string, cfg config.IDs) (Result, error) {
+// Run は、root をルートとして rules に従って検査する。ファイルの読み込みの誤りは error で返す。
+func Run(root string, rules *Rules) (Result, error) {
 	c := &checker{
-		root:  root,
-		cfg:   cfg,
-		defs:  map[string]*definition{},
-		defAt: map[string]bool{},
-		refs:  map[string]int{},
-		files: map[string][]string{},
-	}
-	for _, p := range cfg.Prefixes {
-		re, err := regexp.Compile(p.Pattern)
-		if err != nil {
-			return Result{}, fmt.Errorf("%s の pattern が正しくない: %w", p.Prefix, err)
-		}
-		c.rules = append(c.rules, &prefixRule{cfg: p, re: re})
+		root:     root,
+		cfg:      rules.cfg,
+		rules:    rules.prefixes,
+		children: map[string]map[string]bool{},
+		defs:     map[string]*definition{},
+		defAt:    map[string]bool{},
+		refs:     map[string]int{},
+		files:    map[string][]string{},
 	}
 	if err := c.collectDefinitions(); err != nil {
 		return Result{}, err
@@ -137,10 +151,8 @@ func Run(root string, cfg config.IDs) (Result, error) {
 		return a.Line < b.Line
 	})
 	res := Result{Findings: c.findings, Definitions: len(c.defs)}
-	for _, r := range c.rules {
-		for _, names := range r.children {
-			res.Children += len(names)
-		}
+	for _, names := range c.children {
+		res.Children += len(names)
 	}
 	return res, nil
 }
@@ -180,7 +192,6 @@ func (c *checker) collectDefinitions() error {
 		if ch == nil {
 			continue
 		}
-		r.children = map[string]map[string]bool{}
 		for _, f := range ch.Files {
 			lines, err := c.read(f)
 			if err != nil {
@@ -197,10 +208,10 @@ func (c *checker) collectDefinitions() error {
 					if !ok1 || !ok2 || !r.fullMatch(parent.text) || isPlaceholder(name.text) {
 						continue
 					}
-					if r.children[parent.text] == nil {
-						r.children[parent.text] = map[string]bool{}
+					if c.children[parent.text] == nil {
+						c.children[parent.text] = map[string]bool{}
 					}
-					r.children[parent.text][name.text] = true
+					c.children[parent.text][name.text] = true
 				}
 			}
 		}
@@ -333,7 +344,7 @@ func (c *checker) recordRef(r *prefixRule, file string, lineNo int, line, id str
 	}
 	if ch := r.cfg.Children; ch != nil && strings.HasPrefix(line[end:], ch.Separator) {
 		rest := line[end+len(ch.Separator):]
-		if name := longestPrefix(rest, r.children[id]); name != "" {
+		if name := longestPrefix(rest, c.children[id]); name != "" {
 			return // 子の参照。名前の検査は子の名前そのもので済んでいる
 		}
 		if token := leadingToken(rest); token != "" {
