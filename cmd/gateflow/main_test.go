@@ -107,3 +107,37 @@ func TestRun_ProxyInvalidArgs(t *testing.T) {
 		}
 	}
 }
+
+func TestRun_UsageListsCommands(t *testing.T) {
+	_, _, errOut := runCmd()
+	for _, w := range []string{"gateflow run", "gateflow login", "gateflow doctor sandbox"} {
+		if !strings.Contains(errOut, w) {
+			t.Errorf("使い方に %q がない: %q", w, errOut)
+		}
+	}
+}
+
+func TestRun_RunArgs(t *testing.T) {
+	for _, args := range [][]string{{"run"}, {"run", "T-001", "T-002"}, {"doctor"}, {"doctor", "other"}} {
+		code, _, errOut := runCmd(args...)
+		if code != exitUsage || strings.Contains(errOut, "知らないコマンド") {
+			t.Errorf("args=%v code=%d err=%q", args, code, errOut)
+		}
+	}
+}
+
+// 個人の設定（使う AI サービス）がなければ、docker を使う前に止まる。
+func TestRun_RunWithoutPersonalConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := project(t, actorTable)
+	for _, args := range [][]string{
+		{"run", "T-001", "--project", root},
+		{"doctor", "sandbox", "--project", root},
+		{"login"},
+	} {
+		code, _, errOut := runCmd(args...)
+		if code != exitUsage || !strings.Contains(errOut, "agent") {
+			t.Errorf("args=%v code=%d err=%q, want 個人の設定の agent の案内", args, code, errOut)
+		}
+	}
+}

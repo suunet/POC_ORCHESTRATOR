@@ -2,12 +2,15 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"gateflow/internal/config"
 	"gateflow/internal/container"
@@ -26,12 +29,20 @@ const (
 
 const usage = `使い方:
   gateflow version
+  gateflow login                         使う AI サービスにログインする（個人の設定の agent）
+  gateflow run <T-NNN> [--project <dir>] 指示書の P5 を実行する（M1）
+  gateflow doctor sandbox [--project <dir>]  エージェントが外へ出られないことを確かめる
   gateflow check [--project <dir>]      すべての検証（M0ではID整合チェックだけ）
   gateflow check ids [--project <dir>]  ID整合チェックだけ
 `
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// signalContext は、Ctrl+C と SIGTERM で取り消される context を返す。
+func signalContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -43,6 +54,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "version":
 		fmt.Fprintf(stdout, "gateflow %s\n", version)
 		return exitOK
+	case "run", "login", "doctor":
+		ctx, cancel := signalContext()
+		defer cancel()
+		switch args[0] {
+		case "run":
+			return cmdRun(ctx, args[1:], stdout, stderr)
+		case "login":
+			return cmdLogin(ctx, args[1:], stdout, stderr)
+		default:
+			return cmdDoctor(ctx, args[1:], stdout, stderr)
+		}
 	case "proxy":
 		return proxy(args[1:], stdout, stderr)
 	case "check":

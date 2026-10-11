@@ -27,9 +27,8 @@ func (i Images) ProxyTag() string { return "gateflow-proxy:" + i.Version }
 // BuildAgent は、土台のイメージと、プロジェクトの Dockerfile（土台を BASE として受け取る）のイメージを作り、後者のタグを返す。
 // プロジェクトのビルドの文脈は Dockerfile のあるディレクトリだけにし、プロジェクトのフォルダ全体（.env など）を送らない。
 func (i Images) BuildAgent(ctx context.Context, root string, p *config.Project) (string, error) {
-	baseFile := i.Tool.Dockerfile("agent-base")
-	if _, err := i.Docker.Exec(ctx, "build", "--tag", i.BaseTag(), "--file", baseFile, filepath.Dir(baseFile)); err != nil {
-		return "", fmt.Errorf("土台のイメージを作れない: %w", err)
+	if err := i.BuildBase(ctx); err != nil {
+		return "", err
 	}
 	file := filepath.Join(root, p.Agent.Dockerfile)
 	tag := i.AgentTag(p.Name)
@@ -37,6 +36,15 @@ func (i Images) BuildAgent(ctx context.Context, root string, p *config.Project) 
 		return "", fmt.Errorf("プロジェクトのエージェントのイメージを作れない: %w", err)
 	}
 	return tag, nil
+}
+
+// BuildBase は、エージェントの土台のイメージを作る（login でも使う）。
+func (i Images) BuildBase(ctx context.Context) error {
+	baseFile := i.Tool.Dockerfile("agent-base")
+	if _, err := i.Docker.Exec(ctx, "build", "--tag", i.BaseTag(), "--file", baseFile, filepath.Dir(baseFile)); err != nil {
+		return fmt.Errorf("土台のイメージを作れない: %w", err)
+	}
+	return nil
 }
 
 // ProxyBuildArgs は、プロキシのイメージを作る docker build の引数。文脈はツール本体の bin/。
