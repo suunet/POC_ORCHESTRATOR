@@ -150,12 +150,7 @@ func (p *P5) run(ctx context.Context, run *ticket.Run) (Result, error) {
 		}
 	}()
 
-	mounts := append(p.Workspace.AgentMounts(t.ID),
-		p.Agent.AuthMount(),
-		container.Mount{Type: container.Bind, Source: envFile, Target: "/work/.env", ReadOnly: true},
-		container.Mount{Type: container.Bind, Source: outDir, Target: "/out"},
-		container.Mount{Type: container.Bind, Source: t.Path, Target: "/in/ticket.md", ReadOnly: true},
-	)
+	inputs := []container.Mount{{Type: container.Bind, Source: t.Path, Target: "/in/ticket.md", ReadOnly: true}}
 	var policies []prompt.PolicyFile
 	for _, pol := range p.Project.Policies {
 		if !slices.Contains(pol.Roles, "dev") {
@@ -168,7 +163,7 @@ func (p *P5) run(ctx context.Context, run *ticket.Run) (Result, error) {
 			continue
 		}
 		target := "/in/policies/" + filepath.ToSlash(pol.Path)
-		mounts = append(mounts, container.Mount{Type: container.Bind, Source: src, Target: target, ReadOnly: true})
+		inputs = append(inputs, container.Mount{Type: container.Bind, Source: src, Target: target, ReadOnly: true})
 		policies = append(policies, prompt.PolicyFile{Path: target, Purpose: pol.Purpose})
 	}
 
@@ -180,27 +175,11 @@ func (p *P5) run(ctx context.Context, run *ticket.Run) (Result, error) {
 		return Result{}, err
 	}
 
-	env := p.Agent.Env()
-	for _, k := range []string{"HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"} {
-		env[k] = proxyURL
-	}
-	env["NO_PROXY"], env["no_proxy"] = "localhost,127.0.0.1", "localhost,127.0.0.1"
-	for k, v := range p.offlineEnv() {
-		env[k] = v
-	}
 	cmd, stdin := p.Agent.Command(req)
-	spec := container.Spec{
-		Name:        fmt.Sprintf("gateflow-%s-%s-p5", p.Project.Name, strings.ToLower(t.ID)),
-		Image:       p.AgentImage,
-		Network:     p.Egress.Network(),
-		User:        workspace.User,
-		Workdir:     "/work",
-		Env:         env,
-		Mounts:      mounts,
-		Cmd:         cmd,
-		Timeout:     agentTimeout,
-		IdleTimeout: agentIdleTimeout,
-	}
+	spec := agentSpec(fmt.Sprintf("gateflow-%s-%s-p5", p.Project.Name, strings.ToLower(t.ID)), p.AgentImage,
+		p.Egress.Network(), proxyURL, p.Agent, p.Project, p.Workspace.AgentMounts(t.ID), envFile, outDir, inputs)
+	spec.Cmd = cmd
+	spec.Timeout, spec.IdleTimeout = agentTimeout, agentIdleTimeout
 
 	var out *output.P5Result
 	for attempt := 1; attempt <= 1+outputRetries; attempt++ {
@@ -243,7 +222,7 @@ func (p *P5) run(ctx context.Context, run *ticket.Run) (Result, error) {
 		Network: "none",
 		User:    workspace.User,
 		Workdir: "/work",
-		Env:     p.offlineEnv(),
+		Env:     offlineEnv(p.Project),
 		Mounts: append(p.Workspace.AgentMounts(t.ID),
 			container.Mount{Type: container.Bind, Source: envFile, Target: "/work/.env", ReadOnly: true}),
 	}}
@@ -276,15 +255,6 @@ func (p *P5) run(ctx context.Context, run *ticket.Run) (Result, error) {
 		return Result{}, err
 	}
 	return Result{Outcome: Done, Message: fmt.Sprintf("作業ブランチ %s を取り込んだ", t.Branch)}, nil
-}
-
-// offlineEnv は、外のモジュールを取得させない環境変数（エージェントと検証用のコンテナ）。
-func (p *P5) offlineEnv() map[string]string {
-	env := map[string]string{"GOPROXY": "off", "GOFLAGS": "-mod=readonly", "HOME": "/home/agent"}
-	if p.Project.Deps != nil {
-		env[p.Project.Deps.CacheEnv] = "/cache"
-	}
-	return env
 }
 
 func (p *P5) prompt(policies []prompt.PolicyFile) (agent.Request, error) {
