@@ -16,10 +16,11 @@ ENV DISABLE_AUTOUPDATER=1 \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
 # root でない利用者で動かす（sudo は入れない）。
-# NOTE: 新しいボリュームを初めて /vol（作業用）や /auth（AI サービスの認証）にマウントすると、Docker はこの
-# ディレクトリの持ち主を写す。特権を落としたコンテナは chown できないので、agent の持ち主で作っておく
+# NOTE: 空のボリューム（またはボリュームの空のサブパス）を /vol（作業用）・/auth（AI サービスの認証）・
+# /cache（依存のキャッシュ）にマウントすると、Docker はイメージのこのディレクトリの持ち主を写す。
+# 特権を落としたコンテナは chown できないので、agent の持ち主で作っておく
 RUN useradd --create-home --uid 10001 agent \
  && mkdir -p /vol /work /out /in /cache /auth \
- && chown agent:agent /vol /work /out /auth
+ && chown agent:agent /vol /work /out /auth /cache
 USER agent
 WORKDIR /work
