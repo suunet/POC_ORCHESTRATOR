@@ -395,6 +395,47 @@ func TestRun_EvidenceMissing(t *testing.T) {
 	}
 }
 
+// 根拠が BJ に渡した入力（指示書・規約）を指すときは、入力の写しで確かめる（Q-22）。
+// 規約はどちらのパスで書かれても受け付け、報告ではリポジトリのパスにそろえる。
+func TestRun_EvidenceInputs(t *testing.T) {
+	f := newFlow(t, flowTicket, map[string][]string{
+		"p2-review": {`{"outcome": "approved", "summary": "s", "findings": [
+		  {"label": "IMO", "finding": "a", "evidence": {"file": "/in/ticket.md", "line": 3}},
+		  {"label": "IMO", "finding": "b", "evidence": {"file": "/in/policies/.docs/operations/policies/coding.md", "line": 1}},
+		  {"label": "IMO", "finding": "c", "evidence": {"file": ".docs/operations/policies/coding.md", "line": 1}}]}`},
+		"p3-prepare": {p3Done},
+	})
+	f.e.Project.Policies[0].Roles = []string{"dev", "bj"}
+	res := mustRun(t, f)
+	if res.Outcome != engine.Gate || f.runner.calls["p2-review"] != 1 {
+		t.Fatalf("res = %+v, p2 の呼び出し = %d", res, f.runner.calls["p2-review"])
+	}
+	steps, _ := filepath.Glob(filepath.Join(res.RunDir, "steps", "*p2-review", "in", "ticket.md"))
+	if len(steps) != 1 {
+		t.Errorf("指示書の写しがない: %v", steps)
+	}
+	review, _ := os.ReadFile(filepath.Join(f.root, ".docs/_stash/tickets/T-002/reviews/01-p2-review.md"))
+	if strings.Contains(string(review), "/in/policies/") || !strings.Contains(string(review), "/in/ticket.md:3") {
+		t.Errorf("報告の根拠のパス:\n%s", review)
+	}
+	log, _ := os.ReadFile(filepath.Join(res.RunDir, "log.jsonl"))
+	if !strings.Contains(string(log), `"checked":"input:ticket.md"`) || !strings.Contains(string(log), `"checked":"input:policies/.docs/operations/policies/coding.md"`) {
+		t.Errorf("根拠の検査の記録がない:\n%s", log)
+	}
+}
+
+// 入力の写しの行数を超える根拠は、出力の不正。
+func TestRun_EvidenceInputLine(t *testing.T) {
+	f := newFlow(t, flowTicket, map[string][]string{
+		"p2-review":  {`{"outcome": "approved", "summary": "s", "findings": [{"label": "IMO", "finding": "a", "evidence": {"file": "/in/ticket.md", "line": 999}}]}`, p2Approved},
+		"p3-prepare": {p3Done},
+	})
+	res := mustRun(t, f)
+	if f.runner.calls["p2-review"] != 2 {
+		t.Fatalf("res = %+v, p2 の呼び出し = %d", res, f.runner.calls["p2-review"])
+	}
+}
+
 func approvedTicket(t *testing.T) string {
 	t.Helper()
 	body := strings.Replace(flowTicket, "ステータス: ready-to-prepare", "ステータス: ready-to-implement", 1)

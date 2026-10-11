@@ -134,6 +134,13 @@ func (e *Engine) agentStep(ctx context.Context, st *State, step, role, dir strin
 		inputs = append(inputs, container.Mount{Type: container.Bind, Source: src, Target: target, ReadOnly: true})
 		policies = append(policies, prompt.PolicyFile{Path: target, Purpose: pol.Purpose})
 	}
+	if role == "bj" {
+		// BJ に渡す入力は写しにして、根拠の検査をその写しに対して行う（Q-22）
+		if inputs, err = snapshotInputs(inputs, filepath.Join(dir, "in")); err != nil {
+			return "", err
+		}
+		knowledge = append(knowledge, "指摘の根拠のファイルは、作業場所のファイルならリポジトリの中のパス（例：`.docs/design/uc/UC-001.md`）、渡した入力なら`/in/`のパス（例：`/in/ticket.md`）で書く")
+	}
 	req, err := e.prompt(step, role, def, knowledge, policies)
 	if err != nil {
 		return "", err
@@ -164,7 +171,7 @@ func (e *Engine) agentStep(ctx context.Context, st *State, step, role, dir strin
 		if err != nil {
 			return "", err
 		}
-		outcome, err := e.readOutput(step, def, outDir, seen)
+		outcome, err := e.readOutput(step, def, dir, seen)
 		if err == nil {
 			if role == "bj" {
 				e.writeReview(step)
@@ -182,8 +189,8 @@ func (e *Engine) agentStep(ctx context.Context, st *State, step, role, dir strin
 	return "", stop("invalid-output", "%s の出力の形が、再実行しても正しくない", step)
 }
 
-func (e *Engine) readOutput(step string, def stepDef, outDir, seen string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(outDir, "result.json"))
+func (e *Engine) readOutput(step string, def stepDef, dir, seen string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "out", "result.json"))
 	if err != nil {
 		return "", fmt.Errorf("%s がない", output.ResultPath)
 	}
@@ -192,7 +199,7 @@ func (e *Engine) readOutput(step string, def stepDef, outDir, seen string) (stri
 		return "", err
 	}
 	if seen != "" {
-		if err := e.checkEvidence(seen); err != nil {
+		if err := e.checkEvidence(seen, filepath.Join(dir, "in")); err != nil {
 			return "", err
 		}
 		e.findings = FindingKeys(e.lastReview.Findings)
@@ -200,20 +207,27 @@ func (e *Engine) readOutput(step string, def stepDef, outDir, seen string) (stri
 	return outcome, nil
 }
 
-// checkEvidence は、BJ の指摘の根拠が、BJ の見た版に実在するかを確かめる（Q-20）。
-func (e *Engine) checkEvidence(seen string) error {
+// checkEvidence は、BJ の指摘の根拠が、BJ の見た版に実在するかを確かめる（Q-20、Q-22）。
+// 作業場所のファイルは書き出した版（seen）、/in/ の入力は写し（in）に対して確かめる。
+// 規約はリポジトリのパスでも /in/policies/ のパスでも受け付け、リポジトリのパスにそろえる。
+// どの根拠がどの写しに当たったかを、記録（evidence-check）に残す。
+func (e *Engine) checkEvidence(seen, in string) error {
 	var ids *idcheck.Result
 	var errs []error
+	var hits []map[string]any
 	for i, f := range e.lastReview.Findings {
 		ev := f.Evidence
 		if ev.File != "" {
-			path := filepath.Join(seen, filepath.FromSlash(ev.File))
-			if !filepath.IsLocal(filepath.FromSlash(ev.File)) {
-				errs = append(errs, fmt.Errorf("findings[%d] の根拠のファイル %s が作業場所の外を指す", i, ev.File))
+			file, path, where, err := resolveEvidence(ev.File, seen, in)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("findings[%d] %w", i, err))
 			} else if data, err := os.ReadFile(path); err != nil {
 				errs = append(errs, fmt.Errorf("findings[%d] の根拠のファイル %s が、BJ の見た版にない", i, ev.File))
 			} else if ev.Line > 0 && ev.Line > countLines(data) {
 				errs = append(errs, fmt.Errorf("findings[%d] の根拠の行 %s:%d が、ファイルの行数（%d）を超える", i, ev.File, ev.Line, countLines(data)))
+			} else {
+				hits = append(hits, map[string]any{"finding": i, "file": ev.File, "line": ev.Line, "checked": where})
+				ev.File = file
 			}
 		}
 		if ev.ID != "" {
@@ -226,10 +240,62 @@ func (e *Engine) checkEvidence(seen string) error {
 			}
 			if !ids.Defined(ev.ID) && !appearsInCatalog(seen, ev.ID) {
 				errs = append(errs, fmt.Errorf("findings[%d] の根拠の ID %s が、カタログにない", i, ev.ID))
+			} else {
+				hits = append(hits, map[string]any{"finding": i, "id": ev.ID, "checked": "catalog"})
 			}
 		}
 	}
-	return errors.Join(errs...)
+	err := errors.Join(errs...)
+	e.log("evidence-check", map[string]any{"hits": hits, "ok": err == nil})
+	return err
+}
+
+// resolveEvidence は、根拠のファイルの書き方から、報告に書くパス・確かめるファイル・当たった先の名前を返す。
+func resolveEvidence(file, seen, in string) (string, string, string, error) {
+	if rel, ok := strings.CutPrefix(file, "/in/"); ok {
+		if !filepath.IsLocal(filepath.FromSlash(rel)) {
+			return "", "", "", fmt.Errorf("の根拠のファイル %s が作業場所の外を指す", file)
+		}
+		if pol, ok := strings.CutPrefix(rel, "policies/"); ok {
+			return pol, filepath.Join(in, filepath.FromSlash(rel)), "input:" + rel, nil
+		}
+		return file, filepath.Join(in, filepath.FromSlash(rel)), "input:" + rel, nil
+	}
+	rel := strings.TrimPrefix(file, "/work/")
+	if !filepath.IsLocal(filepath.FromSlash(rel)) {
+		return "", "", "", fmt.Errorf("の根拠のファイル %s が作業場所の外を指す", file)
+	}
+	if path := filepath.Join(seen, filepath.FromSlash(rel)); fileExists(path) {
+		return rel, path, "seen", nil
+	}
+	if path := filepath.Join(in, "policies", filepath.FromSlash(rel)); fileExists(path) {
+		return rel, path, "input:policies/" + rel, nil
+	}
+	return rel, filepath.Join(seen, filepath.FromSlash(rel)), "seen", nil
+}
+
+// snapshotInputs は、/in/ の入力を dir の下へ写し、マウントの元を写しに替える。
+func snapshotInputs(inputs []container.Mount, dir string) ([]container.Mount, error) {
+	out := make([]container.Mount, 0, len(inputs))
+	for _, m := range inputs {
+		rel, ok := strings.CutPrefix(m.Target, "/in/")
+		if ok && m.Type == container.Bind {
+			data, err := os.ReadFile(m.Source)
+			if err != nil {
+				return nil, err
+			}
+			dst := filepath.Join(dir, filepath.FromSlash(rel))
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(dst, data, 0o644); err != nil {
+				return nil, err
+			}
+			m.Source = dst
+		}
+		out = append(out, m)
+	}
+	return out, nil
 }
 
 func countLines(data []byte) int {
