@@ -125,6 +125,11 @@ func (e *Engine) agentStep(ctx context.Context, st *State, step, role, dir strin
 		if !slices.Contains(pol.Roles, role) {
 			continue
 		}
+		// Git 管理の規約は clone の版を読ませる（clone と規約の版をそろえる。Q-23）。Git 管理外の規約はホストから渡す
+		if e.Workspace.Tracked(ctx, e.Project.Branch.Main, filepath.ToSlash(pol.Path)) {
+			policies = append(policies, prompt.PolicyFile{Path: "/work/" + filepath.ToSlash(pol.Path), Purpose: pol.Purpose})
+			continue
+		}
 		src := filepath.Join(root, pol.Path)
 		if _, err := os.Stat(src); err != nil {
 			e.log("policy-missing", map[string]any{"path": pol.Path})

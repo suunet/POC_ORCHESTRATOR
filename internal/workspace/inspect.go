@@ -33,6 +33,12 @@ git rev-parse HEAD
 git archive --format=tar HEAD
 `
 
+// Tracked は、path がプロジェクトの main で Git 管理されているかを返す（規約を clone の版から渡すかの判定。Q-23）。
+func (w *Workspace) Tracked(ctx context.Context, mainBranch, path string) bool {
+	_, err := w.git(ctx, "cat-file", "-e", mainBranch+":"+path)
+	return err == nil
+}
+
 // Export は、clone の HEAD（コミット済みの版）をホストの dest に展開して、その版のハッシュを返す。
 // clone の中身はエージェントが書いたものなので、dest の外を指すパスとリンクは展開しない。
 func (w *Workspace) Export(ctx context.Context, ticketID, dest string) (string, error) {

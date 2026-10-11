@@ -50,7 +50,7 @@ type Result struct {
 
 // Workspace は、タスクごとの clone の操作。
 type Workspace interface {
-	Prepare(ctx context.Context, ticketID, branch, mainBranch string, deps *config.Deps) error
+	Prepare(ctx context.Context, ticketID, branch, mainBranch string, deps *config.Deps) (workspace.Prepared, error)
 	AgentMounts(ticketID string) []container.Mount
 	ReviewerMounts(ticketID string) []container.Mount
 	CommitHash(ctx context.Context, ticketID, message string, author workspace.Author) (string, bool, error)
@@ -58,6 +58,7 @@ type Workspace interface {
 	Export(ctx context.Context, ticketID, dest string) (string, error)
 	Diff(ctx context.Context, ticketID, base string) (string, error)
 	TreeHash(ctx context.Context, ticketID string) (string, error)
+	Tracked(ctx context.Context, mainBranch, path string) bool
 }
 
 // Egress は、内部ネットワークと許可リストのプロキシ。
@@ -98,6 +99,7 @@ type Engine struct {
 	findings   []string    // 直前の BJ の指摘の指紋
 	lastBlock  string      // 直前の P5 の blocked の理由
 	lastVerify string      // 直前の検証の出力
+	warnings   []string    // 実行の中で見つけた、止めない警告
 	checks     int
 }
 
@@ -105,6 +107,14 @@ type Engine struct {
 type errStop struct{ reason, detail string }
 
 func (e *errStop) Error() string { return e.reason + ": " + e.detail }
+
+// short は、コミットのハッシュの先頭7文字を返す（表示用）。
+func short(hash string) string {
+	if len(hash) > 7 {
+		return hash[:7]
+	}
+	return hash
+}
 
 func stop(reason, format string, args ...any) error {
 	return &errStop{reason: reason, detail: fmt.Sprintf(format, args...)}
@@ -219,6 +229,7 @@ func (e *Engine) loop(ctx context.Context, st *State, step string) (Result, erro
 	}
 	e.run = run
 	res, err := e.loopIn(ctx, run, st, step)
+	res.Warnings = append(res.Warnings, e.warnings...)
 	res.RunDir = run.Dir
 	if res.Status == "" {
 		res.Status = ticket.Status(st.Status)
@@ -240,8 +251,13 @@ func (e *Engine) loopIn(ctx context.Context, run *ticket.Run, st *State, step st
 	if err := st.Save(run.Dir); err != nil {
 		return Result{}, err
 	}
-	if err := e.Workspace.Prepare(ctx, e.Ticket.ID, e.Ticket.Branch, e.Project.Branch.Main, e.Project.Deps); err != nil {
+	prep, err := e.Workspace.Prepare(ctx, e.Ticket.ID, e.Ticket.Branch, e.Project.Branch.Main, e.Project.Deps)
+	if err != nil {
 		return Result{}, err
+	}
+	e.log("workspace", map[string]any{"main": prep.Main, "head": prep.Head, "forwarded": prep.Forwarded, "behind": prep.Behind})
+	if prep.Behind {
+		e.warnings = append(e.warnings, fmt.Sprintf("main が進んでいる（%s）が、作業ブランチに自分のコミットがあるので取り込んでいない。作業ブランチは main の古い版の上にある", short(prep.Main)))
 	}
 	allow := append(slices.Clone(e.Agent.Hosts()), e.Project.Agent.Allow...)
 	os.WriteFile(filepath.Join(run.Dir, "allowlist.txt"), []byte(strings.Join(allow, "\n")+"\n"), 0o644)

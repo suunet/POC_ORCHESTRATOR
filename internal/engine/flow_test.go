@@ -95,10 +95,12 @@ type flowWorkspace struct {
 	imports  []string
 	trees    []string // TreeHash が順に返す値。尽きたら呼ばれるたびに違う値
 	treeCall int
+	prepared workspace.Prepared
+	tracked  map[string]bool
 }
 
-func (w *flowWorkspace) Prepare(context.Context, string, string, string, *config.Deps) error {
-	return nil
+func (w *flowWorkspace) Prepare(context.Context, string, string, string, *config.Deps) (workspace.Prepared, error) {
+	return w.prepared, nil
 }
 func (w *flowWorkspace) AgentMounts(id string) []container.Mount {
 	return []container.Mount{
@@ -127,6 +129,7 @@ func (w *flowWorkspace) Export(_ context.Context, _, dest string) (string, error
 func (w *flowWorkspace) Diff(context.Context, string, string) (string, error) {
 	return "diff --git a/backend/log.go b/backend/log.go\n", nil
 }
+func (w *flowWorkspace) Tracked(_ context.Context, _, path string) bool { return w.tracked[path] }
 func (w *flowWorkspace) TreeHash(context.Context, string) (string, error) {
 	w.treeCall++
 	if w.treeCall <= len(w.trees) {
@@ -433,6 +436,39 @@ func TestRun_EvidenceInputLine(t *testing.T) {
 	res := mustRun(t, f)
 	if f.runner.calls["p2-review"] != 2 {
 		t.Fatalf("res = %+v, p2 の呼び出し = %d", res, f.runner.calls["p2-review"])
+	}
+}
+
+// 作業ブランチが main の進みを取り込めないときは、止めずに警告し、使った main を記録する（Q-23）。
+func TestRun_MainBehindWarning(t *testing.T) {
+	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Approved}, "p3-prepare": {p3Done}})
+	f.ws.prepared = workspace.Prepared{Main: "abcdef0123456789", Head: "1234567", Behind: true}
+	res := mustRun(t, f)
+	if res.Outcome != engine.Gate || len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "abcdef0") {
+		t.Fatalf("res = %+v", res)
+	}
+	log, _ := os.ReadFile(filepath.Join(res.RunDir, "log.jsonl"))
+	if !strings.Contains(string(log), `"main":"abcdef0123456789"`) || !strings.Contains(string(log), `"behind":true`) {
+		t.Errorf("clone の用意の記録がない:\n%s", log)
+	}
+}
+
+// Git 管理の規約は clone の版（/work）を読ませ、ホストからは渡さない（Q-23）。
+func TestRun_TrackedPolicyFromClone(t *testing.T) {
+	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Approved}, "p3-prepare": {p3Done}})
+	f.e.Project.Policies[0].Roles = []string{"dev", "bj"}
+	f.ws.tracked = map[string]bool{".docs/operations/policies/coding.md": true}
+	res := mustRun(t, f)
+	prompts, _ := filepath.Glob(filepath.Join(res.RunDir, "steps", "*p2-review", "prompt.md"))
+	if len(prompts) != 1 {
+		t.Fatalf("prompt.md = %v", prompts)
+	}
+	data, _ := os.ReadFile(prompts[0])
+	if !strings.Contains(string(data), "/work/.docs/operations/policies/coding.md") || strings.Contains(string(data), "/in/policies/") {
+		t.Errorf("規約の場所:\n%s", data)
+	}
+	if copies, _ := filepath.Glob(filepath.Join(res.RunDir, "steps", "*p2-review", "in", "policies")); len(copies) != 0 {
+		t.Errorf("Git 管理の規約をホストから渡した: %v", copies)
 	}
 }
 

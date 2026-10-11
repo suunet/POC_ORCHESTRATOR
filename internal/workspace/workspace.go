@@ -79,7 +79,18 @@ if [ -d "$d/repo/.git" ]; then
   cd "$d/repo"
   st=clean
   [ -z "$(git status --porcelain)" ] || st=dirty
-  echo "exists $(git rev-parse HEAD) $st"
+  git fetch -q /tmp/main.bundle "+refs/heads/$MAIN:refs/gateflow/main"
+  m=$(git rev-parse refs/gateflow/main)
+  h=$(git rev-parse HEAD)
+  if git merge-base --is-ancestor "$m" "$h"; then
+    mode=current
+  elif [ "$st" = clean ] && git merge-base --is-ancestor "$h" "$m"; then
+    git -c core.hooksPath=/dev/null merge -q --ff-only "$m"
+    mode=forwarded
+  else
+    mode=behind
+  fi
+  echo "exists $(git rev-parse HEAD) $st $m $mode"
 else
   git clone -q --branch "$MAIN" /tmp/main.bundle "$d/repo"
   cd "$d/repo"
@@ -90,25 +101,37 @@ else
 fi
 `
 
+// Prepared は、clone の用意の結果。Main は使った main のハッシュ、Head は用意した後の作業ブランチの先頭。
+// Forwarded は、作業ブランチを新しい main へ早送りしたこと。Behind は、作業ブランチに自分のコミットがあり、
+// main の進みを取り込んでいないこと（Q-23：触らずに警告する）。
+type Prepared struct {
+	Main      string
+	Head      string
+	Forwarded bool
+	Behind    bool
+}
+
 // Prepare は、チケットの clone を用意する。clone がなければ main から作り、あれば使い回す。
-// 使い回すときに取り込まれていない変更があれば止める。deps があれば、main の写しに対して依存を取得する。
-func (w *Workspace) Prepare(ctx context.Context, ticketID, branch, mainBranch string, deps *config.Deps) error {
+// 使い回すときに取り込まれていない変更があれば止める。作業ブランチに自分のコミットがなく、作業ツリーがきれいなら、
+// 新しい main へ早送りする（Q-23）。deps があれば、main の写しに対して依存を取得する。
+func (w *Workspace) Prepare(ctx context.Context, ticketID, branch, mainBranch string, deps *config.Deps) (Prepared, error) {
 	bundle, err := w.bundleMain(ctx, mainBranch)
 	if err != nil {
-		return err
+		return Prepared{}, err
 	}
 	var out bytes.Buffer
 	spec := w.spec(ticketID, "clone", []container.Mount{{Type: container.Volume, Source: w.Volume(), Target: "/vol"}},
 		map[string]string{"TICKET": ticketID, "BRANCH": branch, "MAIN": mainBranch}, cloneScript)
 	spec.Stdin = bytes.NewReader(bundle)
 	if err := w.run(ctx, spec, &out); err != nil {
-		return fmt.Errorf("clone を用意できない: %w", err)
+		return Prepared{}, fmt.Errorf("clone を用意できない: %w", err)
 	}
-	if err := w.checkClone(ctx, ticketID, strings.TrimSpace(out.String())); err != nil {
-		return err
+	p, err := w.checkClone(ctx, ticketID, strings.TrimSpace(out.String()))
+	if err != nil {
+		return Prepared{}, err
 	}
 	if deps == nil {
-		return nil
+		return p, nil
 	}
 	dep := container.Spec{
 		Name:    w.containerName(ticketID, "deps"),
@@ -125,26 +148,31 @@ func (w *Workspace) Prepare(ctx context.Context, ticketID, branch, mainBranch st
 		Timeout: 10 * time.Minute,
 	}
 	if err := w.run(ctx, dep, io.Discard); err != nil {
-		return fmt.Errorf("依存を取得できない: %w", err)
+		return Prepared{}, fmt.Errorf("依存を取得できない: %w", err)
 	}
-	return nil
+	return p, nil
 }
 
-func (w *Workspace) checkClone(ctx context.Context, ticketID, line string) error {
+func (w *Workspace) checkClone(ctx context.Context, ticketID, line string) (Prepared, error) {
 	f := strings.Fields(line)
 	switch {
 	case len(f) == 2 && f[0] == "created":
-		return nil
-	case len(f) == 3 && f[0] == "exists":
+		return Prepared{Main: f[1], Head: f[1]}, nil
+	case len(f) == 5 && f[0] == "exists":
 		if f[2] != "clean" {
-			return fmt.Errorf("%s の clone に、取り込まれていない変更（コミットしていない変更）がある。確かめてから clone を消すか取り込む", ticketID)
+			return Prepared{}, fmt.Errorf("%s の clone に、取り込まれていない変更（コミットしていない変更）がある。確かめてから clone を消すか取り込む", ticketID)
 		}
 		if _, err := w.git(ctx, "cat-file", "-e", f[1]+"^{commit}"); err != nil {
-			return fmt.Errorf("%s の clone に、プロジェクトに取り込まれていないコミット %s がある。確かめてから clone を消すか取り込む", ticketID, f[1])
+			return Prepared{}, fmt.Errorf("%s の clone に、プロジェクトに取り込まれていないコミット %s がある。確かめてから clone を消すか取り込む", ticketID, f[1])
 		}
-		return nil
+		switch f[4] {
+		case "current", "forwarded", "behind":
+		default:
+			return Prepared{}, fmt.Errorf("clone の用意の出力を読めない: %q", line)
+		}
+		return Prepared{Main: f[3], Head: f[1], Forwarded: f[4] == "forwarded", Behind: f[4] == "behind"}, nil
 	default:
-		return fmt.Errorf("clone の用意の出力を読めない: %q", line)
+		return Prepared{}, fmt.Errorf("clone の用意の出力を読めない: %q", line)
 	}
 }
 

@@ -97,7 +97,7 @@ func TestPrepare_NewClone(t *testing.T) {
 	ws := newWorkspace(t, project, r)
 
 	deps := &config.Deps{Command: "go mod download", CacheEnv: "GOMODCACHE"}
-	if err := ws.Prepare(context.Background(), "T-001", "feature/t-001-x", "main", deps); err != nil {
+	if _, err := ws.Prepare(context.Background(), "T-001", "feature/t-001-x", "main", deps); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 	if len(r.specs) != 2 {
@@ -146,7 +146,7 @@ func TestPrepare_NoDeps(t *testing.T) {
 	project := newRepo(t)
 	main := git(t, project, "rev-parse", "main")
 	r := &fakeRunner{replies: []reply{{stdout: []byte("created " + main + "\n")}}}
-	if err := newWorkspace(t, project, r).Prepare(context.Background(), "T-001", "feature/x", "main", nil); err != nil {
+	if _, err := newWorkspace(t, project, r).Prepare(context.Background(), "T-001", "feature/x", "main", nil); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 	if len(r.specs) != 1 {
@@ -156,33 +156,41 @@ func TestPrepare_NoDeps(t *testing.T) {
 
 func TestPrepare_NoMainBranch(t *testing.T) {
 	project := newRepo(t)
-	if err := newWorkspace(t, project, &fakeRunner{}).Prepare(context.Background(), "T-001", "feature/x", "develop", nil); err == nil {
+	if _, err := newWorkspace(t, project, &fakeRunner{}).Prepare(context.Background(), "T-001", "feature/x", "develop", nil); err == nil {
 		t.Fatal("main のブランチがないのに進んだ")
 	}
 }
 
 // clone がすでにあれば使い回す。ただし取り込まれていない変更があれば止める。
+// main の進みは、自分のコミットがなければ早送りし、あれば警告の印を返す（Q-23）。
 func TestPrepare_ExistingClone(t *testing.T) {
 	project := newRepo(t)
 	main := git(t, project, "rev-parse", "main")
 	cases := []struct {
 		name    string
 		stdout  string
+		want    workspace.Prepared
 		wantErr string
 	}{
-		{"変更なし", "exists " + main + " clean\n", ""},
-		{"作業ツリーに変更がある", "exists " + main + " dirty\n", "取り込まれていない"},
-		{"取り込まれていないコミットがある", "exists 0123456789abcdef0123456789abcdef01234567 clean\n", "取り込まれていない"},
+		{"変更なし", "exists " + main + " clean " + main + " current\n", workspace.Prepared{Main: main, Head: main}, ""},
+		{"早送りした", "exists " + main + " clean " + main + " forwarded\n", workspace.Prepared{Main: main, Head: main, Forwarded: true}, ""},
+		{"main が進んだが自分のコミットがある", "exists " + main + " clean " + main + " behind\n", workspace.Prepared{Main: main, Head: main, Behind: true}, ""},
+		{"作業ツリーに変更がある", "exists " + main + " dirty " + main + " behind\n", workspace.Prepared{}, "取り込まれていない"},
+		{"取り込まれていないコミットがある", "exists 0123456789abcdef0123456789abcdef01234567 clean " + main + " current\n", workspace.Prepared{}, "取り込まれていない"},
+		{"出力の形が古い", "exists " + main + " clean\n", workspace.Prepared{}, "読めない"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &fakeRunner{replies: []reply{{stdout: []byte(tc.stdout)}}}
-			err := newWorkspace(t, project, r).Prepare(context.Background(), "T-001", "feature/x", "main", nil)
+			got, err := newWorkspace(t, project, r).Prepare(context.Background(), "T-001", "feature/x", "main", nil)
 			if tc.wantErr == "" && err != nil {
 				t.Fatalf("Prepare: %v", err)
 			}
 			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
 				t.Fatalf("err = %v, want %q", err, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Errorf("got %+v, want %+v", got, tc.want)
 			}
 		})
 	}
