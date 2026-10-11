@@ -197,7 +197,7 @@ AIはCLIの非対話実行で呼び出し、Claude CodeとCursorのどちらを�
 | step | 担当 | `outcome`の選択肢 | 固有の項目 |
 | --- | --- | --- | --- |
 | `p2-review` | BJ | `approved`／`needs_fix` | `findings` |
-| `p3-prepare` | DEV | `done`／`needs_answer` | `acceptance`、`testCases`、`sheets`（更新対象のシート）、`unfilled`（埋められなかった観点の値） |
+| `p3-prepare` | DEV | `done`／`needs_answer` | `current`（§3の現状）、`plan`（§4.1の方針）、`acceptance`、`testCases`、`sheets`（更新対象のシート）、`unfilled`（埋められなかった観点の値）。指示書への書き込みはgateflowが行う（2026-10-12、M2のQ-03） |
 | `p5-test` | DEV | `done`／`test_defect`／`blocked` | `tests`（テストと受入条件のIDの対応） |
 | `p5-implement` | DEV | `done`／`test_defect`／`blocked` | `changedSheets`、`blockReason` |
 | `p5-verify` | BJ | `approved`／`needs_fix`／`needs_human` | `findings` |
@@ -344,7 +344,7 @@ MVPは「HYDRAを要件から作り直すのに最低限必要な機能」とし
 | M0 準備 | ツールの骨組み、V2の作成とV1からのカタログ（`uc/`を除く）と規約の取り込み、組み込みのひな形、設計文書の配置 | ID整合チェックを手で実行でき、取り込んだカタログに誤りがない |
 | M1 最小の1本 | 人が書いた指示書からP5だけを実行（clone、コンテナ、Claude Code、出力の検証、検証コマンド、commit、取り込み）。安全のため、時間の上限（1回の実行と無反応）だけをM2から前倒しで入れる。検証コマンドに不合格なら差し戻さず止める | 最も単純なユースケースが実装される。push・外部POST・`.env`の書き換えができないことを確認 |
 | M2 流れを通す | 遷移表、状態の2層管理、人間関門のコマンド、上限（時間以外）と進展なしの検知、差し戻しのループ、`status`、ダミーのAI | 1件がP2→P3→P5→P5後→`ready-for-review`まで、関門以外の介入なしで進む |
-| M3 検証を固める | ID整合チェック、受入条件のテスト、P5の2分割、必須と推奨、規約の目次、`touchMap` | テストを書き換えて通そうとした場合に止まることを、わざと起こして確認 |
+| M3 検証を固める | ID整合チェック、受入条件のテスト、P5の2分割、必須と推奨、規約の目次、`touchMap`、DBなどのサービス（共有方式。composeのサービスを内部ネットワークへ） | テストを書き換えて通そうとした場合に止まることを、わざと起こして確認 |
 | M4 差し戻しと完了 | UATシート、FBの取り込みと分類、戻り先への遷移、`done`の検出、アーカイブ | UATの差し戻しを1件、正本へ反映してから`done`まで通す |
 | M5 入口 | `new`、要件依頼書のスキル、`new --from` | 要件依頼書から`draft`を始められる |
 | M6 仕上げ | 通知、`watch`、`setup`、Cursorのアダプタ、バージョンの警告、`render`、機能要求の生成 | 本業のプロジェクトに`setup`で導入できる |
@@ -365,5 +365,5 @@ MVPでは作らないもの：Web UI、並列レビュー、stepごとのプロ�
 - [ ] DEV・BJのプロンプトの調整（HYDRA V2の作り直しの中で）
 - [ ] gateflowの外で作業する経路（人の対話的な利用）に、同じ検証をpre-commitフックやCIで適用するか（MVPの範囲外）
 - [ ] GitHub Issueの読み取り連携（GETのみ）と、ステータスの自動更新（POST。方針の承認が必要）
-- [ ] `project.json`の「Issue」の項目の形：外部のチケット管理の種別（Backlog／GitHub）と、コミット・PRに入れる参照の書式をここで決める（M2以降。承認済み 2026-10-12）
+- [x] `project.json`の「Issue」の項目の形：`issue`を任意の項目にする（`tracker`、`commitRef`、`prRef`の書式。外部のAPIは使わず、課題の番号は指示書の欄に人が書く。2026-10-12、M2のQ-18で決定）
 - [ ] 組織共通の規約の層（2つ目のプロジェクトへの導入時に追加。観点表の移し先）
