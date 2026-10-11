@@ -43,8 +43,8 @@ func newSandbox(t *testing.T, r *probeRunner) *engine.Sandbox {
 			Deps:   &config.Deps{Command: "go mod download", CacheEnv: "GOMODCACHE"},
 		},
 		AgentImage: "gateflow-agent-sample:v1",
-		Agent:      mock.Agent{},
-		Workspace:  &fakeWorkspace{},
+		Agent:      &mock.Agent{},
+		Workspace:  &flowWorkspace{},
 		Egress:     &fakeEgress{},
 		Runner:     r,
 	}

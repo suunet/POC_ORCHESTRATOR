@@ -14,18 +14,21 @@ const StateFile = "state.json"
 
 // State は、実行中の状態（状態の2層管理の下の層）。書くのは gateflow だけ。
 type State struct {
-	Ticket   string            `json:"ticket"`
-	Workflow string            `json:"workflow"`
-	Step     string            `json:"step,omitempty"`   // 今の step
-	Steps    int               `json:"steps"`            // この実行の step の数
-	Loops    map[string]int    `json:"loops,omitempty"`  // ループの種類ごとの往復の数
-	Prints   map[string]string `json:"prints,omitempty"` // 進展なしの判定に使う直前の指紋
-	Findings []string          `json:"findings,omitempty"`
-	Feedback string            `json:"feedback,omitempty"` // 次の step に渡す差し戻しの内容（ファイルの場所）
-	Status   string            `json:"status"`             // gateflow が最後に書いたステータス（手での書き換えの検出用）
-	Stopped  *Stop             `json:"stopped,omitempty"`
-	Resume   string            `json:"resume,omitempty"`  // 再開の位置（次に実行する step）
-	Resumed  bool              `json:"resumed,omitempty"` // resume で続けた後か
+	Ticket    string            `json:"ticket"`
+	Workflow  string            `json:"workflow"`
+	Step      string            `json:"step,omitempty"`   // 今の step
+	Steps     int               `json:"steps"`            // この実行の step の数
+	Loops     map[string]int    `json:"loops,omitempty"`  // ループの種類ごとの往復の数
+	Prints    map[string]string `json:"prints,omitempty"` // 進展なしの判定に使う直前の指紋
+	Findings  []string          `json:"findings,omitempty"`
+	Feedback  string            `json:"feedback,omitempty"`  // 次の step に渡す差し戻しの内容（ファイルの場所）
+	DevResult string            `json:"devResult,omitempty"` // 最後の P5 の result.json（P5後に渡す）
+	VerifyLog string            `json:"verifyLog,omitempty"` // 最後の検証の出力（P5後に渡す）
+	Commit    string            `json:"commit,omitempty"`    // 最後のコミット
+	Status    string            `json:"status"`              // gateflow が最後に書いたステータス（手での書き換えの検出用）
+	Stopped   *Stop             `json:"stopped,omitempty"`
+	Resume    string            `json:"resume,omitempty"`  // 再開の位置（次に実行する step）
+	Resumed   bool              `json:"resumed,omitempty"` // resume で続けた後か
 }
 
 // Stop は、止まった理由。

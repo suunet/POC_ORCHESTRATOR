@@ -141,3 +141,68 @@ func TestRun_RunWithoutPersonalConfig(t *testing.T) {
 		}
 	}
 }
+
+// writeTicket は、project の下に指示書を書く。
+func writeTicket(t *testing.T, root, id, status string) string {
+	t.Helper()
+	path := filepath.Join(root, ".docs/_stash/tickets", id, "ticket.md")
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	body := "# " + id + " テスト\n\nステータス: " + status + "\n\n| 項目 | 値 |\n| --- | --- |\n| 種別 | 実装 |\n| ブランチ | feature/x |\n\n### §4.5 承認\n\n- [x] 合意した\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestRun_UsageListsM2Commands(t *testing.T) {
+	_, _, errOut := runCmd()
+	for _, w := range []string{"gateflow ready", "gateflow approve", "gateflow hold", "gateflow cancel", "gateflow status", "gateflow resume"} {
+		if !strings.Contains(errOut, w) {
+			t.Errorf("使い方に %q がない", w)
+		}
+	}
+	// ダミーの AI の指定は使い方に載せない（Q-13）
+	for _, w := range []string{"mock", "GATEFLOW_AGENT", "SCENARIO"} {
+		if strings.Contains(errOut, w) {
+			t.Errorf("使い方に %q が出ている", w)
+		}
+	}
+}
+
+// 関門のコマンドは docker を使わずに、機械検証をしてステータスを書く。
+func TestRun_HumanCommands(t *testing.T) {
+	root := project(t, actorTable)
+	path := writeTicket(t, root, "T-001", "draft")
+	code, out, errOut := runCmd("ready", "T-001", "--project", root)
+	if code != exitOK || !strings.Contains(out, "ready-to-prepare") {
+		t.Fatalf("ready: code=%d out=%q err=%q", code, out, errOut)
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "ステータス: ready-to-prepare") {
+		t.Errorf("指示書 = %s", data)
+	}
+	// 状態に合わないコマンドは拒む
+	if code, _, errOut := runCmd("approve", "T-001", "--project", root); code != exitFailed || !strings.Contains(errOut, "approve") {
+		t.Errorf("approve: code=%d err=%q", code, errOut)
+	}
+	if code, _, _ := runCmd("hold", "T-001", "--project", root); code != exitOK {
+		t.Errorf("hold: code=%d", code)
+	}
+	code, out, _ = runCmd("status", "T-001", "--project", root)
+	if code != exitOK || !strings.Contains(out, "T-001") || !strings.Contains(out, "保留") {
+		t.Errorf("status: code=%d out=%q", code, out)
+	}
+	if code, _, _ := runCmd("cancel", "T-001", "--project", root); code != exitOK {
+		t.Errorf("cancel: code=%d", code)
+	}
+}
+
+func TestRun_StatusAll(t *testing.T) {
+	root := project(t, actorTable)
+	writeTicket(t, root, "T-001", "draft")
+	writeTicket(t, root, "T-002", "ready-to-approve")
+	code, out, _ := runCmd("status", "--project", root)
+	if code != exitOK || !strings.Contains(out, "T-001") || !strings.Contains(out, "T-002") || !strings.Contains(out, "approve T-002") {
+		t.Errorf("status: code=%d out=%q", code, out)
+	}
+}

@@ -29,9 +29,15 @@ const (
 
 const usage = `使い方:
   gateflow version
-  gateflow login                         使う AI サービスにログインする（個人の設定の agent）
-  gateflow run <T-NNN> [--project <dir>] 指示書の P5 を実行する（M1）
-  gateflow doctor sandbox [--project <dir>]  エージェントが外へ出られないことを確かめる
+  gateflow login                            使う AI サービスにログインする（個人の設定の agent）
+  gateflow run [<T-NNN>] [--project <dir>]  チケットを人間関門まで進める（省くと進められるチケットを順に）
+  gateflow resume <T-NNN> [--project <dir>] 止まった実行を再開の位置から続ける
+  gateflow status [<T-NNN>] [--project <dir>]  状態と、次にすることを表示する
+  gateflow ready <T-NNN> [--project <dir>]  質疑がすべて確定したら P2 へ進める
+  gateflow approve <T-NNN> [--project <dir>]  §4.5 がすべてチェックされたら実装へ進める
+  gateflow hold|unhold <T-NNN> [--project <dir>]  保留の印を付ける・外す
+  gateflow cancel <T-NNN> [--project <dir>] チケットを中止する
+  gateflow doctor sandbox [--project <dir>] エージェントが外へ出られないことを確かめる
   gateflow check [--project <dir>]      すべての検証（M0ではID整合チェックだけ）
   gateflow check ids [--project <dir>]  ID整合チェックだけ
 `
@@ -54,17 +60,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "version":
 		fmt.Fprintf(stdout, "gateflow %s\n", version)
 		return exitOK
-	case "run", "login", "doctor":
+	case "run", "resume", "login", "doctor":
 		ctx, cancel := signalContext()
 		defer cancel()
 		switch args[0] {
 		case "run":
 			return cmdRun(ctx, args[1:], stdout, stderr)
+		case "resume":
+			return cmdResume(ctx, args[1:], stdout, stderr)
 		case "login":
 			return cmdLogin(ctx, args[1:], stdout, stderr)
 		default:
 			return cmdDoctor(ctx, args[1:], stdout, stderr)
 		}
+	case "ready", "approve", "hold", "unhold", "cancel":
+		return cmdHuman(args[0], args[1:], stdout, stderr)
+	case "status":
+		return cmdStatus(args[1:], stdout, stderr)
 	case "proxy":
 		return proxy(args[1:], stdout, stderr)
 	case "check":

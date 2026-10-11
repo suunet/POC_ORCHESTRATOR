@@ -1,0 +1,597 @@
+package engine_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"gateflow/builtins"
+	"gateflow/internal/agent/mock"
+	"gateflow/internal/config"
+	"gateflow/internal/container"
+	"gateflow/internal/engine"
+	"gateflow/internal/idcheck"
+	"gateflow/internal/ticket"
+	"gateflow/internal/workflow"
+	"gateflow/internal/workspace"
+)
+
+const flowTicket = `# T-002 ログの基盤を作る
+
+ステータス: ready-to-prepare
+
+| 項目 | 値 |
+| --- | --- |
+| 種別 | 実装 |
+| ブランチ | feature/t-002-log |
+
+## §1 目的
+
+- ログをそろえる
+
+## §2 要求
+
+- UC-001 のヘルスチェックの要求のログに、NFR-09 の必須の項目を入れる
+
+## §3 変更前の現状（P3でAIが書く）
+
+- 影響の範囲（IDで検索した結果の要約）：
+
+## §4 実行計画（P3でAIが書く）
+
+### §4.1 方針
+
+-
+
+### §4.2 受入条件
+
+| 受入条件 | ユースケース | 内容 |
+| --- | --- | --- |
+
+### §4.3 テストケース
+
+| テスト | 層（単体／シナリオ） | 受入条件・観点 | 内容 |
+| --- | --- | --- | --- |
+
+### §4.4 更新する文書
+
+| ファイル | 更新の内容 |
+| --- | --- |
+
+### §4.5 承認（人が書く。AIは書かない）
+
+- [ ] §2の要求に合意した
+- [ ] §3の現状の認識に合意した
+- [ ] §4の計画（受入条件・テストケース・更新する文書）に合意した
+`
+
+// 書き出しで展開するカタログ（ID の検査と根拠の確認に使う）。
+var catalog = map[string]string{
+	".docs/design/buc.md":       "| BUC | UC |\n|---|---|\n| BUC-S01 | UC-001（システムの死活を確認する） |\n",
+	".docs/design/uc/UC-001.md": "# UC-001\n\n| ID |\n|---|\n| UC-001-AC-01 |\n| UC-001-AC-02 |\n",
+	"backend/log.go":            "package log\n\nfunc A() {}\n",
+}
+
+const (
+	p2Approved = `{"outcome": "approved", "summary": "問題なし"}`
+	p3Done     = `{"outcome": "done", "summary": "準備した", "current": "ログの基盤はない", "plan": "common/log に作る",
+	  "acceptance": [{"id": "UC-001-AC-02", "uc": "UC-001", "content": "ログに必須の項目がある"}],
+	  "testCases": [{"test": "TestLog", "layer": "scenario", "targets": ["UC-001-AC-02"], "content": "項目を確かめる"}],
+	  "sheets": [{"file": ".docs/design/uc/UC-001.md", "change": "受入条件を足す"}]}`
+	p5Done    = `{"outcome": "done", "summary": "実装した", "tests": [{"test": "TestLog", "file": "backend/tests/scenario/log_test.go", "acceptance": ["UC-001-AC-02"]}]}`
+	vApproved = `{"outcome": "approved", "summary": "突き合わせた"}`
+	vMust     = `{"outcome": "needs_fix", "summary": "直す", "findings": [{"label": "MUST", "finding": "エラーを無視している", "evidence": {"file": "backend/log.go", "line": 3}}]}`
+)
+
+// flowWorkspace は、workspace の偽物。書き出しでカタログを展開する。
+type flowWorkspace struct {
+	commits  []string
+	imports  []string
+	trees    []string // TreeHash が順に返す値。尽きたら呼ばれるたびに違う値
+	treeCall int
+}
+
+func (w *flowWorkspace) Prepare(context.Context, string, string, string, *config.Deps) error {
+	return nil
+}
+func (w *flowWorkspace) AgentMounts(id string) []container.Mount {
+	return []container.Mount{
+		{Type: container.Volume, Source: "v", Subpath: id + "/repo", Target: "/work"},
+		{Type: container.Volume, Source: "v", Subpath: id + "/repo/.git", Target: "/work/.git", ReadOnly: true},
+	}
+}
+func (w *flowWorkspace) ReviewerMounts(id string) []container.Mount {
+	return []container.Mount{{Type: container.Volume, Source: "v", Subpath: id + "/repo", Target: "/work", ReadOnly: true}}
+}
+func (w *flowWorkspace) CommitHash(_ context.Context, _, msg string, _ workspace.Author) (string, bool, error) {
+	w.commits = append(w.commits, msg)
+	return fmt.Sprintf("c%d", len(w.commits)), true, nil
+}
+func (w *flowWorkspace) Import(_ context.Context, _, branch string) error {
+	w.imports = append(w.imports, branch)
+	return nil
+}
+func (w *flowWorkspace) Export(_ context.Context, _, dest string) (string, error) {
+	for p, body := range catalog {
+		os.MkdirAll(filepath.Dir(filepath.Join(dest, p)), 0o755)
+		os.WriteFile(filepath.Join(dest, p), []byte(body), 0o644)
+	}
+	return fmt.Sprintf("c%d", len(w.commits)), nil
+}
+func (w *flowWorkspace) Diff(context.Context, string, string) (string, error) {
+	return "diff --git a/backend/log.go b/backend/log.go\n", nil
+}
+func (w *flowWorkspace) TreeHash(context.Context, string) (string, error) {
+	w.treeCall++
+	if w.treeCall <= len(w.trees) {
+		return w.trees[w.treeCall-1], nil
+	}
+	return fmt.Sprintf("tree-%d", w.treeCall), nil
+}
+
+// flowRunner は、エージェントの代わりに step ごとの出力を順に書き、検証コマンドには codes を順に返す。
+type flowRunner struct {
+	results   map[string][]string // step → 出力の並び（尽きたら最後を繰り返す）
+	codes     []int               // 検証コマンドの終了コード（build・test・lint の順に呼ばれる）
+	outputs   []string            // 検証コマンドの出力（codes と同じ順）
+	calls     map[string]int
+	specs     map[string][]container.Spec
+	inputs    map[string][]map[string]string // step → 呼ばれるたびの /in のファイルの中身
+	verifyIdx int
+}
+
+func newRunner(results map[string][]string) *flowRunner {
+	return &flowRunner{results: results, calls: map[string]int{}, specs: map[string][]container.Spec{}, inputs: map[string][]map[string]string{}}
+}
+
+func stepOf(name string) string {
+	for _, s := range []string{"p5-verify", "p2-review", "p3-prepare", "p5"} {
+		if strings.HasSuffix(name, "-"+s) {
+			return s
+		}
+	}
+	return ""
+}
+
+func (f *flowRunner) Run(_ context.Context, spec container.Spec, stdout, _ io.Writer) (int, error) {
+	step := stepOf(spec.Name)
+	if step == "" { // 検証コマンド
+		i := f.verifyIdx
+		f.verifyIdx++
+		code, out := 0, "ok\n"
+		if i < len(f.codes) {
+			code = f.codes[i]
+		}
+		if i < len(f.outputs) {
+			out = f.outputs[i]
+		}
+		io.WriteString(stdout, out)
+		return code, nil
+	}
+	f.specs[step] = append(f.specs[step], spec)
+	in := map[string]string{}
+	for _, m := range spec.Mounts {
+		if strings.HasPrefix(m.Target, "/in/") {
+			b, _ := os.ReadFile(m.Source)
+			in[m.Target] = string(b)
+		}
+	}
+	f.inputs[step] = append(f.inputs[step], in)
+	rs := f.results[step]
+	if len(rs) > 0 {
+		r := rs[min(f.calls[step], len(rs)-1)]
+		for _, m := range spec.Mounts {
+			if m.Target == "/out" {
+				os.WriteFile(filepath.Join(m.Source, "result.json"), []byte(r), 0o644)
+			}
+		}
+	}
+	f.calls[step]++
+	return 0, nil
+}
+
+type flowFixture struct {
+	e      *engine.Engine
+	ws     *flowWorkspace
+	runner *flowRunner
+	root   string
+}
+
+func newFlow(t *testing.T, body string, results map[string][]string) *flowFixture {
+	t.Helper()
+	root := t.TempDir()
+	write := func(rel, b string) {
+		p := filepath.Join(root, rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(b), 0o644)
+	}
+	write(".docs/_stash/tickets/T-002/ticket.md", body)
+	write(".gateflow/env.template", "A=1\n")
+	write(".docs/operations/policies/coding.md", "規約\n")
+	tk, err := ticket.Load(root, "T-002")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf, err := workflow.LoadBuiltin(builtins.FS(), "aidd-impl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules, err := idcheck.NewRules(config.IDs{Scan: []string{".docs/design"}, Prefixes: []config.Prefix{
+		{Prefix: "UC", Pattern: "UC-[0-9]{3}", Files: []string{".docs/design/buc.md"}, Find: "table-column:UC"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &flowFixture{ws: &flowWorkspace{}, runner: newRunner(results), root: root}
+	f.e = &engine.Engine{
+		Root: root,
+		Project: &config.Project{
+			Name: "sample", Branch: &config.Branch{Main: "main"},
+			Agent:  &config.Agent{EnvTemplate: ".gateflow/env.template"},
+			Verify: &config.Verify{Build: "go build ./...", Test: "go test ./...", Lint: "go vet ./..."},
+			Policies: []config.Policy{
+				{Path: ".docs/operations/policies/coding.md", Roles: []string{"dev"}, Purpose: "コーディング規約"},
+			},
+		},
+		Workflow: wf, Ticket: tk, AgentImage: "img", Agent: &mock.Agent{},
+		Workspace: f.ws, Egress: &fakeEgress{}, Runner: f.runner,
+		Author: workspace.Author{Name: "人", Email: "h@example.invalid"}, Builtins: builtins.FS(), Rules: rules,
+		Now: func() time.Time { return time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC) },
+	}
+	return f
+}
+
+func (f *flowFixture) status(t *testing.T) ticket.Status {
+	t.Helper()
+	tk, err := ticket.Load(f.root, "T-002")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tk.Status
+}
+
+func (f *flowFixture) reload(t *testing.T) {
+	t.Helper()
+	tk, err := ticket.Load(f.root, "T-002")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.e.Ticket = tk
+}
+
+func mustRun(t *testing.T, f *flowFixture) engine.Result {
+	t.Helper()
+	res, err := f.e.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	return res
+}
+
+func readState(t *testing.T, runDir string) *engine.State {
+	t.Helper()
+	s, err := engine.LoadState(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// 関門以外の介入なしで、P2 → P3 → approve → P5 → 検証 → P5後 → ready-for-review まで進む。
+func TestRun_FullFlow(t *testing.T) {
+	f := newFlow(t, flowTicket, map[string][]string{
+		"p2-review": {p2Approved}, "p3-prepare": {p3Done}, "p5": {p5Done}, "p5-verify": {vApproved},
+	})
+	res := mustRun(t, f)
+	if res.Outcome != engine.Gate || f.status(t) != ticket.ReadyToApprove || !strings.Contains(res.Next, "approve T-002") {
+		t.Fatalf("1回目 = %+v, status %s", res, f.status(t))
+	}
+	tk, _ := ticket.Load(f.root, "T-002")
+	if len(tk.MissingSections()) != 0 || !strings.Contains(tk.Body, "| UC-001-AC-02 | UC-001 | ログに必須の項目がある |") {
+		t.Errorf("§3・§4 が書かれていない:\n%s", tk.Body)
+	}
+	if len(f.ws.commits) != 1 || !strings.HasPrefix(f.ws.commits[0], "docs(T-002): ") || len(f.ws.imports) != 1 {
+		t.Errorf("P3 のコミットと取り込み = %q, %q", f.ws.commits, f.ws.imports)
+	}
+
+	// 関門：§4.5 がすべてチェックされていなければ approve できない。
+	if err := engine.Human(tk, f.e.Workflow, "approve", f.e.Now()); err == nil {
+		t.Fatal("§4.5 が未チェックなのに approve できた")
+	}
+	os.WriteFile(tk.Path, []byte(strings.ReplaceAll(tk.Body, "- [ ]", "- [x]")), 0o644)
+	f.reload(t)
+	if err := engine.Human(f.e.Ticket, f.e.Workflow, "approve", f.e.Now()); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	f.reload(t)
+
+	res = mustRun(t, f)
+	if res.Outcome != engine.Finished || f.status(t) != ticket.ReadyForReview {
+		t.Fatalf("2回目 = %+v, status %s", res, f.status(t))
+	}
+	if len(f.ws.commits) != 2 || !strings.HasPrefix(f.ws.commits[1], "feat(T-002): ") || len(f.ws.imports) != 2 {
+		t.Errorf("P5 のコミットと取り込み = %q, %q", f.ws.commits, f.ws.imports)
+	}
+
+	// BJ（P5後）に渡すのは、指示書・DEV の結果・diff・検証の出力だけで、clone は読み取り専用。
+	in := f.runner.inputs["p5-verify"][0]
+	for _, k := range []string{"/in/ticket.md", "/in/dev-result.json", "/in/diff.patch", "/in/verify.log"} {
+		if _, ok := in[k]; !ok {
+			t.Errorf("P5後に %s が渡されていない: %v", k, keys(in))
+		}
+	}
+	for _, m := range f.runner.specs["p5-verify"][0].Mounts {
+		// 結果の置き場所と、AI サービスの認証（ログインの情報の更新に要る）だけが書き込み可
+		if m.Target != "/out" && m.Target != "/auth" && !m.ReadOnly {
+			t.Errorf("BJ のマウント %s が書き込み可", m.Target)
+		}
+		if m.Target == "/work/.env" {
+			t.Error("BJ に .env を渡している")
+		}
+	}
+	// 記録：BJ が見た版と、ID の検査の版を残す。
+	log, _ := os.ReadFile(filepath.Join(res.RunDir, "log.jsonl"))
+	for _, w := range []string{`"event":"reviewed-version"`, `"event":"check-ids"`, `"commit":"c2"`} {
+		if !strings.Contains(string(log), w) {
+			t.Errorf("記録に %s がない:\n%s", w, log)
+		}
+	}
+}
+
+func keys(m map[string]string) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// P2 の MUST と Q は質疑に変換して draft へ戻す。レビュー報告も作る。
+func TestRun_P2NeedsFix(t *testing.T) {
+	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {`{"outcome": "needs_fix", "summary": "穴がある",
+	  "findings": [
+	    {"label": "MUST", "finding": "UC-001 の要求とログの項目が対応していない", "evidence": {"id": "UC-001"}, "suggestion": "§2 に項目を書く"},
+	    {"label": "Q", "finding": "出力先は標準出力でよいか", "evidence": {"file": "backend/log.go", "line": 1}},
+	    {"label": "IMO", "finding": "名前", "evidence": {"file": "backend/log.go"}}]}`}})
+	res := mustRun(t, f)
+	if res.Outcome != engine.Gate || f.status(t) != ticket.Draft {
+		t.Fatalf("res = %+v, status %s", res, f.status(t))
+	}
+	n, _ := f.e.Ticket.UnresolvedQuestions()
+	if n != 2 {
+		t.Errorf("未確定の質疑 = %d, want 2（MUST と Q。IMO は質疑にしない）", n)
+	}
+	q, _ := os.ReadFile(filepath.Join(f.root, ".docs/_stash/tickets/T-002/questions.md"))
+	if !strings.Contains(string(q), "指示書の修正が必要") || !strings.Contains(string(q), "§2 に項目を書く") {
+		t.Errorf("質疑:\n%s", q)
+	}
+	if _, err := os.Stat(filepath.Join(f.root, ".docs/_stash/tickets/T-002/reviews/01-p2-review.md")); err != nil {
+		t.Errorf("レビュー報告がない: %v", err)
+	}
+	if err := engine.Human(f.e.Ticket, f.e.Workflow, "ready", f.e.Now()); err == nil {
+		t.Error("未確定の質疑があるのに ready できた")
+	}
+}
+
+// 指摘の根拠が BJ の見た版にないときは、出力の不正として1回だけ再実行する。
+func TestRun_EvidenceMissing(t *testing.T) {
+	f := newFlow(t, flowTicket, map[string][]string{
+		"p2-review":  {`{"outcome": "needs_fix", "summary": "s", "findings": [{"label": "MUST", "finding": "f", "evidence": {"file": "nothing.go", "line": 1}}]}`, p2Approved},
+		"p3-prepare": {p3Done},
+	})
+	res := mustRun(t, f)
+	if res.Outcome != engine.Gate || f.runner.calls["p2-review"] != 2 {
+		t.Fatalf("res = %+v, p2 の呼び出し = %d", res, f.runner.calls["p2-review"])
+	}
+	log, _ := os.ReadFile(filepath.Join(res.RunDir, "log.jsonl"))
+	if !strings.Contains(string(log), "nothing.go") {
+		t.Errorf("根拠のない指摘の記録がない:\n%s", log)
+	}
+}
+
+func approvedTicket(t *testing.T) string {
+	t.Helper()
+	body := strings.Replace(flowTicket, "ステータス: ready-to-prepare", "ステータス: ready-to-implement", 1)
+	return strings.ReplaceAll(body, "- [ ]", "- [x]")
+}
+
+// 検証に不合格なら、失敗の内容を付けて P5 へ戻す。
+func TestRun_VerifyLoop(t *testing.T) {
+	f := newFlow(t, approvedTicket(t), map[string][]string{"p5": {p5Done}, "p5-verify": {vApproved}})
+	f.runner.codes = []int{0, 1, 0, 0, 0, 0}
+	f.runner.outputs = []string{"ok", "--- FAIL: TestLog (0.1s)", "ok", "ok", "ok", "ok"}
+	res := mustRun(t, f)
+	if res.Outcome != engine.Finished || f.runner.calls["p5"] != 2 {
+		t.Fatalf("res = %+v, P5 の呼び出し = %d", res, f.runner.calls["p5"])
+	}
+	if fb := f.runner.inputs["p5"][1]["/in/feedback.md"]; !strings.Contains(fb, "TestLog") {
+		t.Errorf("2回目の P5 に差し戻しの内容が渡されていない: %q", fb)
+	}
+	if s := readState(t, res.RunDir); s.Loops["verify"] != 1 {
+		t.Errorf("loops = %v", s.Loops)
+	}
+}
+
+// ループの往復が上限を超えたら、再開の位置を残して止める。
+func TestRun_LoopLimit(t *testing.T) {
+	f := newFlow(t, approvedTicket(t), map[string][]string{"p5": {p5Done}})
+	f.e.Project.Limits = &config.Limits{Loops: 2}
+	for i := range 30 {
+		f.runner.codes = append(f.runner.codes, 1)
+		f.runner.outputs = append(f.runner.outputs, fmt.Sprintf("--- FAIL: Test%d", i))
+	}
+	res := mustRun(t, f)
+	if res.Outcome != engine.Stopped || res.Reason != "limit-loops" {
+		t.Fatalf("res = %+v", res)
+	}
+	if f.runner.calls["p5"] != 3 {
+		t.Errorf("P5 の呼び出し = %d, want 3（最初と2往復）", f.runner.calls["p5"])
+	}
+	if s := readState(t, res.RunDir); s.Resume != "p5" || s.Stopped == nil {
+		t.Errorf("state = %+v", s)
+	}
+}
+
+// 同じ検証の失敗（所要時間などを除いて同じ出力）が続いたら、上限の前でも止める。
+func TestRun_NoProgressVerify(t *testing.T) {
+	f := newFlow(t, approvedTicket(t), map[string][]string{"p5": {p5Done}})
+	for i := range 30 {
+		f.runner.codes = append(f.runner.codes, 1)
+		f.runner.outputs = append(f.runner.outputs, fmt.Sprintf("--- FAIL: TestLog (0.%ds)", i))
+	}
+	res := mustRun(t, f)
+	if res.Outcome != engine.Stopped || res.Reason != "no-progress" || f.runner.calls["p5"] != 2 {
+		t.Fatalf("res = %+v, P5 の呼び出し = %d", res, f.runner.calls["p5"])
+	}
+	// 正規化の前と後の両方を記録に残す。
+	matches, _ := filepath.Glob(filepath.Join(res.RunDir, "steps", "*", "fingerprint-*.txt"))
+	if len(matches) < 2 {
+		t.Errorf("指紋の記録 = %v", matches)
+	}
+}
+
+// 前回と同じ MUST の指摘が残っていたら止める。
+func TestRun_NoProgressReview(t *testing.T) {
+	f := newFlow(t, approvedTicket(t), map[string][]string{"p5": {p5Done}, "p5-verify": {vMust}})
+	res := mustRun(t, f)
+	if res.Outcome != engine.Stopped || res.Reason != "no-progress" || f.runner.calls["p5-verify"] != 2 {
+		t.Fatalf("res = %+v, P5後 の呼び出し = %d", res, f.runner.calls["p5-verify"])
+	}
+}
+
+// 差し戻しの後の P5 で作業ツリーが変わらなければ止める。
+func TestRun_NoProgressDiff(t *testing.T) {
+	f := newFlow(t, approvedTicket(t), map[string][]string{"p5": {p5Done}})
+	f.ws.trees = []string{"same", "same"}
+	f.runner.codes = []int{0, 1, 0, 0, 1, 0}
+	f.runner.outputs = []string{"ok", "--- FAIL: A", "ok", "ok", "--- FAIL: B", "ok"}
+	res := mustRun(t, f)
+	if res.Outcome != engine.Stopped || res.Reason != "no-progress" {
+		t.Fatalf("res = %+v", res)
+	}
+}
+
+// step の数が上限を超えたら止める。
+func TestRun_StepLimit(t *testing.T) {
+	f := newFlow(t, approvedTicket(t), map[string][]string{"p5": {p5Done}, "p5-verify": {vApproved}})
+	f.e.Project.Limits = &config.Limits{Steps: 2}
+	res := mustRun(t, f)
+	if res.Outcome != engine.Stopped || res.Reason != "limit-steps" {
+		t.Fatalf("res = %+v", res)
+	}
+	if s := readState(t, res.RunDir); s.Resume != "p5-verify" {
+		t.Errorf("再開の位置 = %q, want p5-verify", s.Resume)
+	}
+}
+
+// blocked で止まり、人が原因を直した後に resume で続けられる。
+func TestRun_BlockedAndResume(t *testing.T) {
+	f := newFlow(t, approvedTicket(t), map[string][]string{
+		"p5":        {`{"outcome": "blocked", "summary": "依存", "blockReason": {"kind": "dependency", "detail": "x がない"}}`, p5Done},
+		"p5-verify": {vApproved},
+	})
+	res := mustRun(t, f)
+	if res.Outcome != engine.Stopped || res.Reason != "blocked" || !strings.Contains(res.Next, "resume T-002") || f.status(t) != ticket.Implementing {
+		t.Fatalf("res = %+v, status %s", res, f.status(t))
+	}
+	f.reload(t)
+	res, err := f.e.Resume(context.Background())
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if res.Outcome != engine.Finished || f.status(t) != ticket.ReadyForReview {
+		t.Fatalf("resume = %+v, status %s", res, f.status(t))
+	}
+}
+
+// 出力の形が2回続けて違えば止める。
+func TestRun_InvalidOutput(t *testing.T) {
+	f := newFlow(t, approvedTicket(t), map[string][]string{"p5": {`{"outcome": "done"}`}})
+	res := mustRun(t, f)
+	if res.Outcome != engine.Stopped || res.Reason != "invalid-output" || f.runner.calls["p5"] != 2 {
+		t.Fatalf("res = %+v, P5 の呼び出し = %d", res, f.runner.calls["p5"])
+	}
+}
+
+// 機械検証（受入条件の確認）に不合格なら、失敗の内容を付けて同じ step に差し戻す。
+func TestRun_CheckFailsLoopsToSameStep(t *testing.T) {
+	bad := strings.Replace(strings.Replace(p3Done, "UC-001-AC-02", "UC-001-AC-09", -1), "", "", 1)
+	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Approved}, "p3-prepare": {bad, p3Done}})
+	res := mustRun(t, f)
+	if res.Outcome != engine.Gate || f.runner.calls["p3-prepare"] != 2 {
+		t.Fatalf("res = %+v, P3 の呼び出し = %d", res, f.runner.calls["p3-prepare"])
+	}
+	if fb := f.runner.inputs["p3-prepare"][1]["/in/feedback.md"]; !strings.Contains(fb, "UC-001-AC-09") {
+		t.Errorf("2回目の P3 に失敗の内容が渡されていない: %q", fb)
+	}
+}
+
+// 人が手でステータスを書き換えていたら警告する（止めない）。
+func TestRun_ManualEditWarning(t *testing.T) {
+	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Approved}, "p3-prepare": {p3Done}})
+	mustRun(t, f) // gateflow が ready-to-approve を書いた
+	tk, _ := ticket.Load(f.root, "T-002")
+	os.WriteFile(tk.Path, []byte(strings.Replace(tk.Body, "ステータス: ready-to-approve", "ステータス: ready-to-prepare", 1)), 0o644)
+	f.reload(t)
+	res := mustRun(t, f)
+	if len(res.Warnings) == 0 || !strings.Contains(res.Warnings[0], "手で") {
+		t.Errorf("警告がない: %+v", res)
+	}
+}
+
+// 関門のコマンド：ready・cancel・hold／unhold。gateflow が書いたことを記録に残す。
+func TestHuman(t *testing.T) {
+	body := strings.Replace(flowTicket, "ステータス: ready-to-prepare", "ステータス: draft", 1)
+	f := newFlow(t, body, nil)
+	if err := engine.Human(f.e.Ticket, f.e.Workflow, "approve", f.e.Now()); err == nil {
+		t.Error("draft で approve できた")
+	}
+	if err := engine.Human(f.e.Ticket, f.e.Workflow, "ready", f.e.Now()); err != nil {
+		t.Fatalf("ready: %v", err)
+	}
+	if f.status(t) != ticket.ReadyToPrepare {
+		t.Errorf("status = %s", f.status(t))
+	}
+	if err := engine.Human(f.e.Ticket, f.e.Workflow, "hold", f.e.Now()); err != nil || !f.e.Ticket.Held() {
+		t.Errorf("hold: %v, held %v", err, f.e.Ticket.Held())
+	}
+	res := mustRun(t, f)
+	if res.Outcome != engine.NothingToDo || !strings.Contains(res.Message, "保留") {
+		t.Errorf("保留のチケットを進めた: %+v", res)
+	}
+	if err := engine.Human(f.e.Ticket, f.e.Workflow, "unhold", f.e.Now()); err != nil || f.e.Ticket.Held() {
+		t.Errorf("unhold: %v", err)
+	}
+	if err := engine.Human(f.e.Ticket, f.e.Workflow, "cancel", f.e.Now()); err != nil || f.status(t) != ticket.Cancelled {
+		t.Errorf("cancel: %v, status %s", err, f.status(t))
+	}
+	data, _ := os.ReadFile(filepath.Join(f.root, ".docs/_stash/tickets/T-002", engine.EventsFile))
+	var n int
+	for _, l := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var ev map[string]any
+		if json.Unmarshal([]byte(l), &ev) == nil {
+			n++
+		}
+	}
+	if n != 4 {
+		t.Errorf("関門の記録 = %d件, want 4:\n%s", n, data)
+	}
+}
+
+type fakeEgress struct{ started, stopped bool }
+
+func (e *fakeEgress) Start(context.Context, []string) (string, error) {
+	e.started = true
+	return "http://gateflow-proxy:3128", nil
+}
+func (e *fakeEgress) Stop(context.Context) ([]byte, error) {
+	e.stopped = true
+	return nil, nil
+}
+func (e *fakeEgress) Network() string { return "gateflow-sample-internal" }

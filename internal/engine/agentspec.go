@@ -10,14 +10,15 @@ import (
 // agentSpec は、エージェントのコンテナの仕様を作る。P5 とサンドボックスの確認で同じものを使う。
 //
 // 内部ネットワークに置き、外へはプロキシ（proxyURL）だけを通す。clone の .git、依存のキャッシュ、.env は読み取り専用。
+// envFile が空なら .env を渡さない（BJ）。
 func agentSpec(name, image, network, proxyURL string, ag agent.Agent, project *config.Project,
 	wsMounts []container.Mount, envFile, outDir string, extra []container.Mount) container.Spec {
 	mounts := append([]container.Mount{}, wsMounts...)
-	mounts = append(mounts,
-		ag.AuthMount(),
-		container.Mount{Type: container.Bind, Source: envFile, Target: "/work/.env", ReadOnly: true},
-		container.Mount{Type: container.Bind, Source: outDir, Target: "/out"},
-	)
+	mounts = append(mounts, ag.AuthMount())
+	if envFile != "" {
+		mounts = append(mounts, container.Mount{Type: container.Bind, Source: envFile, Target: "/work/.env", ReadOnly: true})
+	}
+	mounts = append(mounts, container.Mount{Type: container.Bind, Source: outDir, Target: "/out"})
 	mounts = append(mounts, extra...)
 
 	env := ag.Env()

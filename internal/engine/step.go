@@ -1,0 +1,440 @@
+package engine
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"time"
+
+	"gateflow/internal/agent"
+	"gateflow/internal/container"
+	"gateflow/internal/gate"
+	"gateflow/internal/idcheck"
+	"gateflow/internal/output"
+	"gateflow/internal/prompt"
+)
+
+// 出力の形が違うときの再実行の回数（設計：1回だけ再実行する）。
+const outputRetries = 1
+
+// stepDef は、エージェントの step の、Instruction・出力の説明・出力の読み込み。
+type stepDef struct {
+	instruction string
+	describe    func() string
+	parse       func(e *Engine, data []byte) (string, error)
+}
+
+var stepDefs = map[string]stepDef{
+	"p2-review": {"prompts/instructions/p2-review.md", output.DescribeP2, func(e *Engine, d []byte) (string, error) {
+		r, err := output.ParseP2(d)
+		if err != nil {
+			return "", err
+		}
+		e.lastReview = r
+		return r.Outcome, nil
+	}},
+	"p3-prepare": {"prompts/instructions/p3-prepare.md", output.DescribeP3, func(e *Engine, d []byte) (string, error) {
+		r, err := output.ParseP3(d)
+		if err != nil {
+			return "", err
+		}
+		e.lastP3 = r
+		return r.Outcome, nil
+	}},
+	"p5": {"prompts/instructions/p5.md", output.DescribeP5, func(e *Engine, d []byte) (string, error) {
+		r, err := output.ParseP5(d)
+		if err != nil {
+			return "", err
+		}
+		e.lastBlock = ""
+		if r.BlockReason != nil {
+			e.lastBlock = r.BlockReason.Kind + ": " + r.BlockReason.Detail
+		}
+		return r.Outcome, nil
+	}},
+	"p5-verify": {"prompts/instructions/p5-verify.md", output.DescribeP5Verify, func(e *Engine, d []byte) (string, error) {
+		r, err := output.ParseP5Verify(d)
+		if err != nil {
+			return "", err
+		}
+		e.lastReview = r
+		return r.Outcome, nil
+	}},
+}
+
+// execStep は、step を1つ実行して outcome を返す。人の確認待ちで止めるときは errStop を返す。
+func (e *Engine) execStep(ctx context.Context, st *State, step, dir string) (string, error) {
+	s := e.Workflow.Steps[step]
+	if s.Check == "verify-commands" {
+		return e.verify(ctx, st, dir)
+	}
+	outcome, err := e.agentStep(ctx, st, step, s.Agent, dir)
+	if err != nil || step != "p5" || outcome != "done" {
+		return outcome, err
+	}
+	// 差し戻しの後の P5 で作業ツリーが変わっていなければ、進展なし（Q-08）
+	tree, err := e.Workspace.TreeHash(ctx, e.Ticket.ID)
+	if err != nil {
+		return "", err
+	}
+	prev := st.Prints["tree"]
+	st.Prints["tree"] = tree
+	if prev != "" && prev == tree {
+		return "", stop("no-progress", "差し戻しの後の P5 で、作業ツリーが変わっていない（%s）", tree)
+	}
+	return outcome, nil
+}
+
+func (e *Engine) agentStep(ctx context.Context, st *State, step, role, dir string) (string, error) {
+	def, ok := stepDefs[step]
+	if !ok {
+		return "", fmt.Errorf("step %s の出力の形が gateflow にない", step)
+	}
+	root, err := filepath.Abs(e.Root)
+	if err != nil {
+		return "", err
+	}
+	outDir := filepath.Join(dir, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return "", err
+	}
+
+	// BJ が見る版を書き出して記録する（根拠の確認は、この版に対して行う。Q-20）
+	var seen string
+	if role == "bj" {
+		seen = filepath.Join(dir, "seen")
+		hash, err := e.Workspace.Export(ctx, e.Ticket.ID, seen)
+		if err != nil {
+			return "", err
+		}
+		e.log("reviewed-version", map[string]any{"step": step, "commit": hash})
+	}
+
+	inputs, knowledge, err := e.inputs(ctx, st, step, dir)
+	if err != nil {
+		return "", err
+	}
+	var policies []prompt.PolicyFile
+	for _, pol := range e.Project.Policies {
+		if !slices.Contains(pol.Roles, role) {
+			continue
+		}
+		src := filepath.Join(root, pol.Path)
+		if _, err := os.Stat(src); err != nil {
+			e.log("policy-missing", map[string]any{"path": pol.Path})
+			continue
+		}
+		target := "/in/policies/" + filepath.ToSlash(pol.Path)
+		inputs = append(inputs, container.Mount{Type: container.Bind, Source: src, Target: target, ReadOnly: true})
+		policies = append(policies, prompt.PolicyFile{Path: target, Purpose: pol.Purpose})
+	}
+	req, err := e.prompt(step, role, def, knowledge, policies)
+	if err != nil {
+		return "", err
+	}
+	os.WriteFile(filepath.Join(dir, "prompt.md"), []byte("# システムプロンプト（追加分）\n\n"+req.System+"\n\n# ユーザーメッセージ\n\n"+req.Prompt), 0o644)
+
+	mounts, envFile := e.Workspace.AgentMounts(e.Ticket.ID), filepath.Join(root, e.Project.Agent.EnvTemplate)
+	if role == "bj" {
+		// BJ には clone を .git を含めて読み取り専用で渡し、.env は渡さない
+		mounts, envFile = e.Workspace.ReviewerMounts(e.Ticket.ID), ""
+	}
+	limits := e.Project.EffectiveLimits()
+	cmd, stdin := e.Agent.Command(req)
+	spec := agentSpec(fmt.Sprintf("gateflow-%s-%s-%s", e.Project.Name, strings.ToLower(e.Ticket.ID), step),
+		e.AgentImage, e.Egress.Network(), e.proxyURL, e.Agent, e.Project, mounts, envFile, outDir, inputs)
+	spec.Cmd = cmd
+	spec.Timeout = time.Duration(limits.RunMinutes) * time.Minute
+	spec.IdleTimeout = time.Duration(limits.IdleMinutes) * time.Minute
+
+	for attempt := 1; attempt <= 1+outputRetries; attempt++ {
+		os.Remove(filepath.Join(outDir, "result.json"))
+		spec.Stdin = strings.NewReader(stdin)
+		code, err := e.runLogged(ctx, spec, dir, fmt.Sprintf("agent-%d", attempt))
+		e.log("agent-end", map[string]any{"step": step, "attempt": attempt, "exitCode": code})
+		if errors.Is(err, container.ErrTimeout) || errors.Is(err, container.ErrIdleTimeout) {
+			return "", stop("timeout", "%s：%v", step, err)
+		}
+		if err != nil {
+			return "", err
+		}
+		outcome, err := e.readOutput(step, def, outDir, seen)
+		if err == nil {
+			if role == "bj" {
+				e.writeReview(step)
+			}
+			if step == "p5" {
+				st.DevResult = filepath.Join(outDir, "result.json")
+			}
+			if st.Feedback != "" && (outcome == "done" || outcome == "approved") {
+				st.Feedback = ""
+			}
+			return outcome, nil
+		}
+		e.log("output-invalid", map[string]any{"step": step, "attempt": attempt, "error": err.Error()})
+	}
+	return "", stop("invalid-output", "%s の出力の形が、再実行しても正しくない", step)
+}
+
+func (e *Engine) readOutput(step string, def stepDef, outDir, seen string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(outDir, "result.json"))
+	if err != nil {
+		return "", fmt.Errorf("%s がない", output.ResultPath)
+	}
+	outcome, err := def.parse(e, data)
+	if err != nil {
+		return "", err
+	}
+	if seen != "" {
+		if err := e.checkEvidence(seen); err != nil {
+			return "", err
+		}
+		e.findings = FindingKeys(e.lastReview.Findings)
+	}
+	return outcome, nil
+}
+
+// checkEvidence は、BJ の指摘の根拠が、BJ の見た版に実在するかを確かめる（Q-20）。
+func (e *Engine) checkEvidence(seen string) error {
+	var ids *idcheck.Result
+	var errs []error
+	for i, f := range e.lastReview.Findings {
+		ev := f.Evidence
+		if ev.File != "" {
+			path := filepath.Join(seen, filepath.FromSlash(ev.File))
+			if !filepath.IsLocal(filepath.FromSlash(ev.File)) {
+				errs = append(errs, fmt.Errorf("findings[%d] の根拠のファイル %s が作業場所の外を指す", i, ev.File))
+			} else if data, err := os.ReadFile(path); err != nil {
+				errs = append(errs, fmt.Errorf("findings[%d] の根拠のファイル %s が、BJ の見た版にない", i, ev.File))
+			} else if ev.Line > 0 && ev.Line > countLines(data) {
+				errs = append(errs, fmt.Errorf("findings[%d] の根拠の行 %s:%d が、ファイルの行数（%d）を超える", i, ev.File, ev.Line, countLines(data)))
+			}
+		}
+		if ev.ID != "" {
+			if ids == nil {
+				r, err := idcheck.Run(seen, e.Rules)
+				if err != nil {
+					return err
+				}
+				ids = &r
+			}
+			if !ids.Defined(ev.ID) && !appearsInCatalog(seen, ev.ID) {
+				errs = append(errs, fmt.Errorf("findings[%d] の根拠の ID %s が、カタログにない", i, ev.ID))
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func countLines(data []byte) int {
+	n := bytes.Count(data, []byte("\n"))
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		n++
+	}
+	return n
+}
+
+// appearsInCatalog は、id がカタログ（.docs/design）のどこかに書かれているかを返す（受入条件の ID など）。
+func appearsInCatalog(root, id string) bool {
+	found := false
+	filepath.WalkDir(filepath.Join(root, ".docs", "design"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || found {
+			return nil
+		}
+		if data, err := os.ReadFile(path); err == nil && bytes.Contains(data, []byte(id)) {
+			found = true
+		}
+		return nil
+	})
+	return found
+}
+
+// inputs は、step に渡すファイル（/in の下に読み取り専用）と、プロンプトの知識を返す。
+func (e *Engine) inputs(ctx context.Context, st *State, step, dir string) ([]container.Mount, []string, error) {
+	t := e.Ticket
+	bind := func(src, target string) container.Mount {
+		return container.Mount{Type: container.Bind, Source: src, Target: target, ReadOnly: true}
+	}
+	mounts := []container.Mount{bind(t.Path, "/in/ticket.md")}
+	knowledge := []string{
+		fmt.Sprintf("指示書は`/in/ticket.md`（%s %s）", t.ID, t.Title),
+		"作業場所は`/work`（プロジェクトのリポジトリの作業ツリー。作業ブランチは用意済み）",
+		"カタログ（要件の正本）は`/work/.docs/design/`",
+	}
+	if q := filepath.Join(filepath.Dir(t.Path), "questions.md"); fileExists(q) {
+		mounts = append(mounts, bind(q, "/in/questions.md"))
+		knowledge = append(knowledge, "質疑は`/in/questions.md`（状態が「確定」のものが決まったこと）")
+	}
+	if st.Feedback != "" {
+		mounts = append(mounts, bind(st.Feedback, "/in/feedback.md"))
+		knowledge = append(knowledge, "前回の差し戻しの内容は`/in/feedback.md`。これを直すことを最初に行う")
+	}
+	switch step {
+	case "p3-prepare":
+		tmpl, err := fs.ReadFile(e.Builtins, "templates/catalog/uc.md")
+		if err != nil {
+			return nil, nil, err
+		}
+		path := filepath.Join(dir, "uc-template.md")
+		if err := os.WriteFile(path, tmpl, 0o644); err != nil {
+			return nil, nil, err
+		}
+		mounts = append(mounts, bind(path, "/in/templates/uc.md"))
+	case "p5-verify":
+		diff, err := e.Workspace.Diff(ctx, t.ID, e.Project.Branch.Main)
+		if err != nil {
+			return nil, nil, err
+		}
+		diffPath := filepath.Join(dir, "diff.patch")
+		os.WriteFile(diffPath, []byte(diff), 0o644)
+		mounts = append(mounts, bind(diffPath, "/in/diff.patch"))
+		if st.DevResult != "" {
+			mounts = append(mounts, bind(st.DevResult, "/in/dev-result.json"))
+		}
+		if st.VerifyLog != "" {
+			mounts = append(mounts, bind(st.VerifyLog, "/in/verify.log"))
+		}
+		knowledge = append(knowledge, "作業ブランチの差分は`/in/diff.patch`、DEV の報告は`/in/dev-result.json`、検証のコマンドの出力は`/in/verify.log`")
+	}
+	return mounts, knowledge, nil
+}
+
+func (e *Engine) prompt(step, role string, def stepDef, knowledge []string, policies []prompt.PolicyFile) (agent.Request, error) {
+	persona, err := prompt.LoadBuiltin(e.Builtins, "prompts/personas/"+role+".md")
+	if err != nil {
+		return agent.Request{}, err
+	}
+	instruction, err := prompt.LoadBuiltin(e.Builtins, def.instruction)
+	if err != nil {
+		return agent.Request{}, err
+	}
+	var builtin []string
+	if step == "p5" {
+		var v strings.Builder
+		v.WriteString("\n### 検証\n\n実装の後に、次のコマンドを作業場所（/work）で実行し、すべて合格することを確かめる。gateflow も同じコマンドで確かめる。\n\n")
+		for _, c := range gate.Commands(e.Project.Verify) {
+			fmt.Fprintf(&v, "- %s：`%s`\n", c.Name, c.Cmd)
+		}
+		instruction += v.String()
+		testFirst, err := prompt.LoadBuiltin(e.Builtins, "prompts/policies/test-first.md")
+		if err != nil {
+			return agent.Request{}, err
+		}
+		builtin = append(builtin, testFirst)
+	}
+	model := ""
+	if e.Personal != nil {
+		model = e.Personal.Model
+	}
+	req := prompt.Build(prompt.Input{
+		Persona: persona, Knowledge: knowledge, Instruction: instruction,
+		OutputContract: def.describe(), Policies: policies, BuiltinPolicy: builtin, Model: model,
+	})
+	req.Step = step
+	return req, nil
+}
+
+// verify は、検証コマンドを実行する。不合格なら、出力の指紋を作る。
+func (e *Engine) verify(ctx context.Context, st *State, dir string) (string, error) {
+	root, err := filepath.Abs(e.Root)
+	if err != nil {
+		return "", err
+	}
+	g := gate.Gate{Runner: e.Runner, Base: container.Spec{
+		Name:    fmt.Sprintf("gateflow-%s-%s-verify", e.Project.Name, strings.ToLower(e.Ticket.ID)),
+		Image:   e.AgentImage,
+		Network: "none",
+		User:    "agent",
+		Workdir: "/work",
+		Env:     offlineEnv(e.Project),
+		Mounts: append(e.Workspace.AgentMounts(e.Ticket.ID),
+			container.Mount{Type: container.Bind, Source: filepath.Join(root, e.Project.Agent.EnvTemplate), Target: "/work/.env", ReadOnly: true}),
+	}}
+	results, passed, err := g.Run(ctx, gate.Commands(e.Project.Verify))
+	var all strings.Builder
+	failed := map[string]string{}
+	for _, r := range results {
+		os.WriteFile(filepath.Join(dir, "verify-"+r.Name+".log"), []byte(r.Output), 0o644)
+		fmt.Fprintf(&all, "## %s（終了コード %d）：`%s`\n\n%s\n", r.Name, r.ExitCode, r.Cmd, r.Output)
+		e.log("verify", map[string]any{"name": r.Name, "exitCode": r.ExitCode, "seconds": r.Duration.Seconds()})
+		if r.ExitCode != 0 {
+			failed[r.Name] = r.Output
+		}
+	}
+	if err != nil {
+		return "", err
+	}
+	logPath := filepath.Join(dir, "verify.log")
+	os.WriteFile(logPath, []byte(all.String()), 0o644)
+	st.VerifyLog = logPath
+	if passed {
+		return "passed", nil
+	}
+	e.print = VerifyFingerprint(failed)
+	e.lastVerify = all.String()
+	return "failed", nil
+}
+
+// feedbackFor は、ループで戻るときに次の step へ渡す差し戻しの内容を作る。
+func (e *Engine) feedbackFor(step string) string {
+	switch step {
+	case "verify":
+		return "# 検証のコマンドの不合格\n\n次の検証のコマンドが不合格だった。直してから、もう一度すべて合格することを確かめる。\n\n" + e.lastVerify
+	case "p5-verify":
+		var b strings.Builder
+		b.WriteString("# P5後のレビューの指摘（MUST）\n\n次の指摘を直す。\n\n")
+		for _, f := range e.lastReview.Findings {
+			if f.Label == "MUST" {
+				fmt.Fprintf(&b, "- %s（根拠：%s）", f.Finding, evidenceText(f.Evidence))
+				if f.Suggestion != "" {
+					fmt.Fprintf(&b, "。提案：%s", f.Suggestion)
+				}
+				b.WriteString("\n")
+			}
+		}
+		return b.String()
+	}
+	return ""
+}
+
+func evidenceText(ev *output.Evidence) string {
+	if ev == nil {
+		return ""
+	}
+	var parts []string
+	if ev.File != "" {
+		s := ev.File
+		if ev.Line > 0 {
+			s += fmt.Sprintf(":%d", ev.Line)
+		}
+		parts = append(parts, s)
+	}
+	if ev.ID != "" {
+		parts = append(parts, ev.ID)
+	}
+	return strings.Join(parts, "、")
+}
+
+// runLogged は、コンテナを起動し、出力を step の記録に残す。
+func (e *Engine) runLogged(ctx context.Context, spec container.Spec, dir, name string) (int, error) {
+	stdout, err := os.Create(filepath.Join(dir, name+".jsonl"))
+	if err != nil {
+		return 0, err
+	}
+	defer stdout.Close()
+	var stderr bytes.Buffer
+	code, runErr := e.Runner.Run(ctx, spec, stdout, &stderr)
+	os.WriteFile(filepath.Join(dir, name+".stderr"), stderr.Bytes(), 0o644)
+	return code, runErr
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
