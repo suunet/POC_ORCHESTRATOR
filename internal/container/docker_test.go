@@ -159,3 +159,15 @@ func assertRemoved(t *testing.T, logFile, name string) {
 		t.Errorf("コンテナ %s を消していない。呼び出し:\n%s", name, data)
 	}
 }
+
+// 呼び出し元が止めた（Ctrl+C など）ときも、コンテナを消す。
+func TestDocker_RunCancelled(t *testing.T) {
+	d, logFile := fakeDocker(t, "silent")
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+	_, err := d.Run(ctx, container.Spec{Name: "gateflow-z", Image: "img"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	assertRemoved(t, logFile, "gateflow-z")
+}
