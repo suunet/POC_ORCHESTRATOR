@@ -56,8 +56,9 @@ type Spec struct {
 	Mounts  []Mount
 	Cmd     []string
 
-	Stdin io.Reader // あれば標準入力をつなぐ
-	TTY   bool      // 対話の端末（login など）
+	Stdin  io.Reader // あれば標準入力をつなぐ
+	TTY    bool      // 対話の端末（login など）
+	Detach bool      // 起動して待たない。終わっても自動では消さない
 
 	Timeout     time.Duration // 実行の全体の上限。0 なら上限なし
 	IdleTimeout time.Duration // 出力のない時間の上限。0 なら上限なし
@@ -65,7 +66,11 @@ type Spec struct {
 
 // Args は、docker run の引数を返す。
 func (s Spec) Args() []string {
-	args := []string{"run", "--rm", "--name", s.Name}
+	args := []string{"run", "--rm"}
+	if s.Detach {
+		args[1] = "--detach"
+	}
+	args = append(args, "--name", s.Name)
 	if s.Stdin != nil || s.TTY {
 		args = append(args, "--interactive")
 	}

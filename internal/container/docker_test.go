@@ -82,10 +82,13 @@ func TestHelperProcess(t *testing.T) {
 		return
 	}
 	args := os.Args[slices.Index(os.Args, "--")+1:]
-	if args[0] != "run" {
+	if args[0] != "run" || slices.Contains(args, "--detach") {
 		f, _ := os.OpenFile(os.Getenv("GATEFLOW_TEST_LOG"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		fmt.Fprintln(f, strings.Join(args, " "))
 		f.Close()
+		if mode == "detached-no-network" && len(args) > 1 && args[0] == "network" && args[1] == "inspect" {
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 	switch mode {
