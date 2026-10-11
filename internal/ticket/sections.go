@@ -1,0 +1,235 @@
+package ticket
+
+import (
+	"fmt"
+	"os"
+	"strings"
+)
+
+// AcceptanceRow・TestCaseRow・SheetRow は、§4.2〜§4.4 の表の1行。
+type AcceptanceRow struct{ ID, UC, Content string }
+type TestCaseRow struct{ Test, Layer, Targets, Content string }
+type SheetRow struct{ File, Change string }
+
+// Sections は、P3 の結果から gateflow が書く§3・§4.1〜§4.4 の中身。§4.5 は人が書くので持たない。
+type Sections struct {
+	Current    string
+	Plan       string
+	Acceptance []AcceptanceRow
+	TestCases  []TestCaseRow
+	Sheets     []SheetRow
+}
+
+// 節の見出しの始まり。中身は見出しの次の行から、次の見出しの前まで。
+const (
+	headCurrent    = "## §3"
+	headPlan       = "### §4.1"
+	headAcceptance = "### §4.2"
+	headTestCases  = "### §4.3"
+	headSheets     = "### §4.4"
+	headApproval   = "### §4.5"
+)
+
+// gateflow が書く節（§3・§4.1〜§4.4）。
+var writtenSections = []string{headCurrent, headPlan, headAcceptance, headTestCases, headSheets}
+
+// WriteSections は、§3・§4.1〜§4.4 を書き換える。ステータスの行、§1・§2、§4.5 は変えない。
+func (t *Ticket) WriteSections(s Sections) error {
+	data, err := os.ReadFile(t.Path)
+	if err != nil {
+		return err
+	}
+	var acc, tests, sheets strings.Builder
+	acc.WriteString("| 受入条件 | ユースケース | 内容 |\n| --- | --- | --- |\n")
+	for _, a := range s.Acceptance {
+		fmt.Fprintf(&acc, "| %s | %s | %s |\n", cell(a.ID), cell(a.UC), cell(a.Content))
+	}
+	tests.WriteString("| テスト | 層（単体／シナリオ） | 受入条件・観点 | 内容 |\n| --- | --- | --- | --- |\n")
+	for _, tc := range s.TestCases {
+		fmt.Fprintf(&tests, "| %s | %s | %s | %s |\n", cell(tc.Test), cell(tc.Layer), cell(tc.Targets), cell(tc.Content))
+	}
+	sheets.WriteString("P5で更新してよいのは、ここに挙げたシートだけ。\n\n| ファイル | 更新の内容 |\n| --- | --- |\n")
+	for _, sh := range s.Sheets {
+		fmt.Fprintf(&sheets, "| `%s` | %s |\n", cell(sh.File), cell(sh.Change))
+	}
+	body := string(data)
+	for head, content := range map[string]string{
+		headCurrent:    strings.TrimSpace(s.Current) + "\n",
+		headPlan:       strings.TrimSpace(s.Plan) + "\n",
+		headAcceptance: acc.String(),
+		headTestCases:  tests.String(),
+		headSheets:     sheets.String(),
+	} {
+		var ok bool
+		if body, ok = replaceSection(body, head, content); !ok {
+			return fmt.Errorf("指示書 %s に節 %s がない", t.ID, head)
+		}
+	}
+	if err := writeFileAtomic(t.Path, []byte(body)); err != nil {
+		return err
+	}
+	t.Body = body
+	return nil
+}
+
+// cell は、表のセルに入れる文字列から改行と | を除く。
+func cell(s string) string {
+	s = strings.ReplaceAll(strings.TrimSpace(s), "\n", " ")
+	return strings.ReplaceAll(s, "|", "／")
+}
+
+// replaceSection は、見出し head の節の中身を content に替える。
+func replaceSection(body, head, content string) (string, bool) {
+	lines := strings.Split(body, "\n")
+	start := -1
+	for i, l := range lines {
+		if strings.HasPrefix(l, head) {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return body, false
+	}
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		if strings.HasPrefix(lines[i], "#") {
+			end = i
+			break
+		}
+	}
+	out := append([]string{}, lines[:start+1]...)
+	out = append(out, "")
+	out = append(out, strings.Split(strings.TrimRight(content, "\n"), "\n")...)
+	out = append(out, "")
+	out = append(out, lines[end:]...)
+	return strings.Join(out, "\n"), true
+}
+
+func sectionLines(body, head string) []string {
+	lines := strings.Split(body, "\n")
+	for i, l := range lines {
+		if !strings.HasPrefix(l, head) {
+			continue
+		}
+		var out []string
+		for _, s := range lines[i+1:] {
+			if strings.HasPrefix(s, "#") {
+				break
+			}
+			out = append(out, s)
+		}
+		return out
+	}
+	return nil
+}
+
+// ひな形の文言（中身とみなさない行）。
+var placeholderLines = map[string]bool{
+	"-": true, "- 影響の範囲（IDで検索した結果の要約）：": true, "- 関係するカタログ・ユースケースの詳細：": true,
+	"P5で更新してよいのは、ここに挙げたシートだけ。": true,
+}
+
+// MissingSections は、§3・§4.1〜§4.4 のうち、ひな形のまま（中身がない）節の見出しを返す。
+func (t *Ticket) MissingSections() []string {
+	var missing []string
+	for _, head := range writtenSections {
+		if !hasContent(sectionLines(t.Body, head)) {
+			missing = append(missing, head)
+		}
+	}
+	return missing
+}
+
+func hasContent(lines []string) bool {
+	for _, l := range lines {
+		s := strings.TrimSpace(l)
+		switch {
+		case s == "" || placeholderLines[s]:
+		case strings.HasPrefix(s, "|"):
+			cells := strings.Split(strings.Trim(s, "|"), "|")
+			filled := false
+			for _, c := range cells {
+				c = strings.TrimSpace(c)
+				if c != "" && !strings.HasPrefix(c, "---") && !strings.Contains(c, "NNN") {
+					filled = true
+				}
+			}
+			// 見出しの行（項目名だけ）は中身とみなさないので、2行目以降のデータの行で判断する
+			if filled && !isHeaderRow(s) {
+				return true
+			}
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+func isHeaderRow(s string) bool {
+	for _, h := range []string{"| 受入条件 | ユースケース |", "| テスト | 層", "| ファイル | 更新の内容 |"} {
+		if strings.HasPrefix(s, h) {
+			return true
+		}
+	}
+	return false
+}
+
+// ApprovalChecked は、§4.5 のチェックが1つ以上あり、すべて入っているかを返す。
+func (t *Ticket) ApprovalChecked() bool {
+	n := 0
+	for _, l := range sectionLines(t.Body, headApproval) {
+		s := strings.TrimSpace(l)
+		switch {
+		case strings.HasPrefix(s, "- [ ]"):
+			return false
+		case strings.HasPrefix(s, "- [x]"), strings.HasPrefix(s, "- [X]"):
+			n++
+		}
+	}
+	return n > 0
+}
+
+// Held は、保留の印（項目の表の「保留」が「はい」）があるかを返す。
+func (t *Ticket) Held() bool {
+	for _, l := range strings.Split(t.Body, "\n") {
+		if v, ok := tableValue(l, "保留"); ok && v == "はい" {
+			return true
+		}
+	}
+	return false
+}
+
+// SetHold は、保留の印を付ける（on）か外す。印は項目の表の「ブランチ」の行の次に置く。
+func (t *Ticket) SetHold(on bool) error {
+	data, err := os.ReadFile(t.Path)
+	if err != nil {
+		return err
+	}
+	var out []string
+	for _, l := range strings.Split(string(data), "\n") {
+		if _, ok := tableValue(l, "保留"); ok {
+			continue
+		}
+		out = append(out, l)
+		if _, ok := tableValue(l, "ブランチ"); ok && on {
+			out = append(out, "| 保留 | はい |")
+		}
+	}
+	body := strings.Join(out, "\n")
+	if err := writeFileAtomic(t.Path, []byte(body)); err != nil {
+		return err
+	}
+	t.Body = body
+	return nil
+}
+
+// IssueID は、項目の表の「Issue」の欄（外部の課題の番号。人が書く）を返す。なければ空。
+func (t *Ticket) IssueID() string {
+	for _, l := range strings.Split(t.Body, "\n") {
+		if v, ok := tableValue(l, "Issue"); ok {
+			return v
+		}
+	}
+	return ""
+}
