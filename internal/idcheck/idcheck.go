@@ -55,7 +55,12 @@ type Result struct {
 	Findings    []Finding
 	Definitions int // 定義されたIDの数（子を除く）
 	Children    int // 定義された子のIDの数
+
+	defined map[string]bool // 定義された ID（子は「親の ID＋区切り＋名前」）
 }
+
+// Defined は、id が定義されているか（子の ID を含む）を返す。
+func (r Result) Defined(id string) bool { return r.defined[id] }
 
 // HasErrors は、必須の指摘があるかを返す。
 func (r Result) HasErrors() bool {
@@ -151,7 +156,23 @@ func Run(root string, rules *Rules) (Result, error) {
 		}
 		return a.Line < b.Line
 	})
-	res := Result{Findings: c.findings, Definitions: len(c.defs)}
+	res := Result{Findings: c.findings, Definitions: len(c.defs), defined: map[string]bool{}}
+	for id := range c.defs {
+		res.defined[id] = true
+	}
+	for _, r := range c.rules {
+		if r.cfg.Children == nil {
+			continue
+		}
+		for parent, names := range c.children {
+			if !r.fullMatch(parent) {
+				continue
+			}
+			for name := range names {
+				res.defined[parent+r.cfg.Children.Separator+name] = true
+			}
+		}
+	}
 	for _, names := range c.children {
 		res.Children += len(names)
 	}

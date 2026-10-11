@@ -233,3 +233,16 @@ func TestRun_RulesReusable(t *testing.T) {
 		t.Errorf("Children = %d, want 0（前回の子が残っている）", res.Children)
 	}
 }
+
+// 検査の結果は、定義された ID（子を含む）の一覧を持つ。
+func TestRun_DefinedIDs(t *testing.T) {
+	res := run(t, baseFiles())
+	for _, id := range []string{"ACT-01", "BUC-P01", "UC-002", "STM-01", "STM-01.下書き"} {
+		if !res.Defined(id) {
+			t.Errorf("%s が定義されていない", id)
+		}
+	}
+	if res.Defined("UC-099") {
+		t.Error("定義のない UC-099 が定義されている")
+	}
+}
