@@ -34,6 +34,7 @@ const (
 	Finished    Outcome = "finished"      // 流れの終わり（ready-for-review など）に着いた
 	Stopped     Outcome = "stopped"       // 人の確認待ちで止まった（blocked、上限、進展なしなど）
 	NothingToDo Outcome = "nothing-to-do" // 進められる状態でない（保留など）
+	Runnable    Outcome = "runnable"      // gateflow が進められる状態（run を待つ。Describe だけが返す）
 )
 
 // Result は、Run の結果。Next は、人が次にすること。
@@ -162,7 +163,7 @@ func (e *Engine) Describe() Result {
 		return Result{Outcome: NothingToDo, Status: e.Ticket.Status, Message: "保留", Next: "gateflow unhold " + e.Ticket.ID, Warnings: e.manualEditWarnings()}
 	}
 	if _, ok := e.Workflow.AutoFrom(string(e.Ticket.Status)); ok {
-		return Result{Outcome: NothingToDo, Status: e.Ticket.Status, Message: "gateflow が進められる", Next: "gateflow run " + e.Ticket.ID, Warnings: e.manualEditWarnings()}
+		return Result{Outcome: Runnable, Status: e.Ticket.Status, Message: "gateflow が次の手順を実行する", Next: "gateflow run " + e.Ticket.ID, Warnings: e.manualEditWarnings()}
 	}
 	res := e.idle()
 	res.Warnings = e.manualEditWarnings()

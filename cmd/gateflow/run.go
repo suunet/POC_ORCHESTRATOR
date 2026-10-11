@@ -291,6 +291,7 @@ func queue(dir string, wf *workflow.Workflow) ([]*ticket.Ticket, error) {
 var outcomeText = map[engine.Outcome]string{
 	engine.Gate: "人間関門で待っている", engine.Finished: "流れの終わりに着いた",
 	engine.Stopped: "人の確認待ちで止まった", engine.NothingToDo: "進められない",
+	engine.Runnable: "gateflow が進められる",
 }
 
 func printResult(w io.Writer, id string, res engine.Result) {
