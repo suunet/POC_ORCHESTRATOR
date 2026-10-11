@@ -265,6 +265,7 @@ POC_ORCHESTRATOR/            ツール（gateflow）
 │ │ ├ templates/             カタログベースの文書のひな形、要件依頼書のスキル
 │ │ └ viewpoints/            観点表の列の定義（中身は置かない）
 │ ├ docker/agent-base.Dockerfile
+│ ├ docker/proxy.Dockerfile     許可リストのプロキシ（bin/のLinux用の実行ファイルをFROM scratchに入れる）
 │ ├ scripts/                 build.sh（配布用のビルドをDockerで行う）
 │ ├ docs/                    この設計文書、plans/（マイルストーンの計画と質問）、policies/（このリポジトリ自身の規約）
 │ └ bin/                     ビルドした実行ファイル
@@ -330,6 +331,7 @@ POC_ORCHESTRATOR/            ツール（gateflow）
 | チケットを進める | `new`（P1の対話）、`new --from`（要件依頼書の取り込み）、`run`（人間関門まで進めて終了）、`watch`（常駐）、`status`（`--all`でアーカイブも） |
 | 人間関門 | `ready`、`approve`、`uat`、`feedback --from review／uat`、`hold`・`unhold`、`cancel`。機械検証付きで状態を書き換える。手での書き換えは警告のみ |
 | その他 | `resume`、`check`（検証の手動実行。`check ids`でID整合チェックだけ）、`retro`、`render`（workflow.mdの表の生成）、`version` |
+| 内部用 | `proxy`（許可リストのプロキシ。人は使わない） |
 
 **要件依頼書（非エンジニア向け）。** 業務チームはgateflowを使わず、プロジェクトに置いたスキルをCursorのコマンド（`/request`）で呼び出す。AIはカタログを読み、回答の例と選択肢を付けた質問で業務の判断を聞き切り、技術の判断は「エンジニアの判断事項」に分ける。業務に影響する技術の話（データの保存期間など）は依頼者に聞く。回答はチャットか質問ファイルで行い、推測で埋めない。出力はBacklogに貼るMarkdown（見出しと箇条書き、先頭に形式の版）。項目は「1. 背景と目的」「2. 依頼内容」「3. 業務の規則と例外」「4. 受入条件（具体例）」「5. 業務に影響する条件」「6. 業務上の未確定事項」「7. エンジニアの判断事項」。エンジニアは`gateflow new --from`で取り込み、6が空でなければ拒否し、7は質疑に登録する。
 
