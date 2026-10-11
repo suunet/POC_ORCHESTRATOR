@@ -13,7 +13,8 @@ import (
 )
 
 // FormatVersion は、このgateflowが読める project.json の書式のバージョン。
-const FormatVersion = 0
+// 1 で name・branch・agent・deps・verify を足した。古い書式は自動で変換せず拒否する。
+const FormatVersion = 1
 
 // ProjectFile は、プロジェクトのルートから見た設定ファイルの場所。
 const ProjectFile = ".gateflow/project.json"
@@ -28,8 +29,47 @@ const (
 type Project struct {
 	FormatVersion   *int     `json:"formatVersion"`
 	GateflowVersion string   `json:"gateflowVersion,omitempty"`
+	Name            string   `json:"name"`
+	Branch          *Branch  `json:"branch"`
+	Agent           *Agent   `json:"agent"`
+	Deps            *Deps    `json:"deps,omitempty"`
+	Verify          *Verify  `json:"verify"`
 	IDs             *IDs     `json:"ids"`
 	Policies        []Policy `json:"policies"`
+}
+
+// Branch は、ブランチの設定。作業ブランチの名前は指示書の欄で決める。
+type Branch struct {
+	// Main は、タスクごとの clone を作る元のブランチ（人が承認した内容）。
+	Main string `json:"main"`
+}
+
+// Agent は、エージェントのコンテナの設定。パスはプロジェクトのルートからの相対パス。
+type Agent struct {
+	// Dockerfile は、gateflow の土台のイメージに言語の道具を足す Dockerfile。
+	Dockerfile string `json:"dockerfile"`
+	// EnvTemplate は、外部への送信を OFF にした .env のひな形。clone の .env の位置に読み取り専用で置く。
+	EnvTemplate string `json:"envTemplate"`
+	// Allow は、AI サービスのほかに通信を許すホスト（host:port）。パッケージの取得先は入れない。
+	Allow []string `json:"allow"`
+}
+
+// Deps は、依存の取得の設定。
+//
+// NOTE: Command は、人が管理するこのファイルの値を、人が承認した main の clone に対してだけ、
+// 準備用のコンテナ（エージェントは動かない）で実行する。エージェントが書き換えた clone には実行しない。
+type Deps struct {
+	// Command は、依存を取得するコマンド（例：go mod download）。
+	Command string `json:"command"`
+	// CacheEnv は、取得した依存の置き場所を渡す環境変数の名前（例：GOMODCACHE）。
+	CacheEnv string `json:"cacheEnv"`
+}
+
+// Verify は、検証コマンドの対応表。どれも必須のレベルで、検証用のコンテナで実行する。
+type Verify struct {
+	Build string `json:"build"`
+	Test  string `json:"test"`
+	Lint  string `json:"lint"`
 }
 
 // IDs は、ID整合チェックの設定。
@@ -77,7 +117,12 @@ type Policy struct {
 	Purpose string   `json:"purpose,omitempty"`
 }
 
-var validRoles = map[string]bool{"dev": true, "bj": true}
+var (
+	validRoles  = map[string]bool{"dev": true, "bj": true}
+	namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+	hostPort    = regexp.MustCompile(`^[A-Za-z0-9.-]+:[0-9]{1,5}$`)
+	envName     = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+)
 
 // LoadProject は、root/.gateflow/project.json を読み込んで検査する。誤りはまとめて返す。
 func LoadProject(root string) (*Project, error) {
@@ -106,6 +151,39 @@ func (p *Project) validate() []error {
 	case *p.FormatVersion != FormatVersion:
 		errs = append(errs, fmt.Errorf("formatVersion %d には対応していない（対応は %d）", *p.FormatVersion, FormatVersion))
 	}
+	switch {
+	case p.Name == "":
+		errs = append(errs, errors.New("name がない"))
+	case !namePattern.MatchString(p.Name):
+		errs = append(errs, fmt.Errorf("name %q は英小文字・数字・ハイフンでない", p.Name))
+	}
+	if p.Branch == nil {
+		errs = append(errs, errors.New("branch がない"))
+	} else if p.Branch.Main == "" {
+		errs = append(errs, errors.New("branch.main がない"))
+	}
+	if p.Agent == nil {
+		errs = append(errs, errors.New("agent がない"))
+	} else {
+		errs = append(errs, p.Agent.validate()...)
+	}
+	if p.Deps != nil {
+		if p.Deps.Command == "" {
+			errs = append(errs, errors.New("deps.command がない"))
+		}
+		if !envName.MatchString(p.Deps.CacheEnv) {
+			errs = append(errs, fmt.Errorf("deps.cacheEnv %q は環境変数の名前でない", p.Deps.CacheEnv))
+		}
+	}
+	if p.Verify == nil {
+		errs = append(errs, errors.New("verify がない"))
+	} else {
+		for _, c := range []struct{ name, cmd string }{{"build", p.Verify.Build}, {"test", p.Verify.Test}, {"lint", p.Verify.Lint}} {
+			if c.cmd == "" {
+				errs = append(errs, fmt.Errorf("verify.%s がない", c.name))
+			}
+		}
+	}
 	if p.IDs == nil {
 		errs = append(errs, errors.New("ids がない"))
 	} else {
@@ -125,6 +203,34 @@ func (p *Project) validate() []error {
 		}
 	}
 	return errs
+}
+
+func (a *Agent) validate() []error {
+	var errs []error
+	for _, f := range []struct{ name, path string }{{"agent.dockerfile", a.Dockerfile}, {"agent.envTemplate", a.EnvTemplate}} {
+		if err := checkRelPath(f.path); err != nil {
+			errs = append(errs, fmt.Errorf("%s %q: %w", f.name, f.path, err))
+		}
+	}
+	for i, h := range a.Allow {
+		if !hostPort.MatchString(h) {
+			errs = append(errs, fmt.Errorf("agent.allow[%d] %q は host:port の形でない", i, h))
+		}
+	}
+	return errs
+}
+
+// checkRelPath は、パスがプロジェクトのルートからの相対パスで、ルートの外を指さないことを確かめる。
+func checkRelPath(p string) error {
+	switch {
+	case p == "":
+		return errors.New("パスがない")
+	case filepath.IsAbs(p):
+		return errors.New("絶対パスは使えない")
+	case !filepath.IsLocal(p):
+		return errors.New("プロジェクトの外を指している")
+	}
+	return nil
 }
 
 func (ids *IDs) validate() []error {

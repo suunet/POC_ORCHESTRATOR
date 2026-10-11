@@ -12,7 +12,10 @@ func project(t *testing.T, actor string) string {
 	t.Helper()
 	root := t.TempDir()
 	files := map[string]string{
-		".gateflow/project.json": `{"formatVersion": 0, "ids": {"scan": ["docs"], "prefixes": [
+		".gateflow/project.json": `{"formatVersion": 1, "name": "sample", "branch": {"main": "main"},
+			"agent": {"dockerfile": ".gateflow/agent.Dockerfile", "envTemplate": ".gateflow/env.template", "allow": []},
+			"verify": {"build": "go build ./...", "test": "go test ./...", "lint": "go vet ./..."},
+			"ids": {"scan": ["docs"], "prefixes": [
 			{"prefix": "ACT", "pattern": "ACT-[0-9]{2}", "files": ["docs/actor.md"], "find": "table-first-column", "nameColumn": "アクター"}
 		]}, "policies": []}`,
 		"docs/actor.md": actor,
