@@ -7,6 +7,7 @@ import "gateflow/internal/container"
 
 // Request は、エージェントへの1回の依頼。
 type Request struct {
+	Step   string // step の名前（例：p5）
 	System string // システムプロンプトに足すもの（Persona）
 	Prompt string // ユーザーメッセージ（Knowledge・Instruction・Output Contract・Policy）
 	Model  string // 空なら指定しない
