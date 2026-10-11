@@ -172,19 +172,27 @@ printf '* -filter\n' > .git/info/attributes
 grep -qx '.env' .git/info/exclude 2>/dev/null || printf '.env\n' >> .git/info/exclude
 g() { git -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }
 g add -A
-if g diff --cached --quiet; then echo "コミットする変更がない" >&2; exit 3; fi
+if g diff --cached --quiet; then echo "unchanged $(git rev-parse HEAD)"; exit 0; fi
 g commit -q -m "$MESSAGE"
+echo "committed $(git rev-parse HEAD)"
 `
 
 var ticketInMessage = regexp.MustCompile(`T-[0-9]{3,}`)
 
 // Commit は、clone の変更をすべて1つのコミットにする。message にはチケットの ID を含める。
 func (w *Workspace) Commit(ctx context.Context, ticketID, message string, author Author) error {
+	_, _, err := w.CommitHash(ctx, ticketID, message, author)
+	return err
+}
+
+// CommitHash は、clone の変更をすべて1つのコミットにして、そのハッシュを返す。
+// 変更がなければコミットせず、今の HEAD のハッシュと changed=false を返す。
+func (w *Workspace) CommitHash(ctx context.Context, ticketID, message string, author Author) (hash string, changed bool, err error) {
 	if !strings.Contains(message, ticketID) || !ticketInMessage.MatchString(message) {
-		return fmt.Errorf("コミットメッセージ %q に %s がない", message, ticketID)
+		return "", false, fmt.Errorf("コミットメッセージ %q に %s がない", message, ticketID)
 	}
 	if author.Name == "" || author.Email == "" {
-		return errors.New("コミットの名義（人の git の設定の user.name と user.email）がない")
+		return "", false, errors.New("コミットの名義（人の git の設定の user.name と user.email）がない")
 	}
 	spec := w.spec(ticketID, "commit",
 		[]container.Mount{{Type: container.Volume, Source: w.Volume(), Subpath: ticketID + "/repo", Target: "/work"}},
@@ -193,10 +201,15 @@ func (w *Workspace) Commit(ctx context.Context, ticketID, message string, author
 			"GIT_AUTHOR_NAME": author.Name, "GIT_AUTHOR_EMAIL": author.Email,
 			"GIT_COMMITTER_NAME": author.Name, "GIT_COMMITTER_EMAIL": author.Email,
 		}, commitScript)
-	if err := w.run(ctx, spec, io.Discard); err != nil {
-		return fmt.Errorf("コミットできない: %w", err)
+	var out bytes.Buffer
+	if err := w.run(ctx, spec, &out); err != nil {
+		return "", false, fmt.Errorf("コミットできない: %w", err)
 	}
-	return nil
+	f := strings.Fields(out.String())
+	if len(f) != 2 || (f[0] != "committed" && f[0] != "unchanged") {
+		return "", false, fmt.Errorf("コミットの出力を読めない: %q", out.String())
+	}
+	return f[1], f[0] == "committed", nil
 }
 
 const importScript = `set -eu

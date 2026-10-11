@@ -1,6 +1,7 @@
 package workspace_test
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"io"
@@ -206,7 +207,7 @@ func TestAgentMounts(t *testing.T) {
 }
 
 func TestCommit_Spec(t *testing.T) {
-	r := &fakeRunner{}
+	r := &fakeRunner{replies: []reply{{stdout: []byte("committed 5555555555555555555555555555555555555555\n")}}}
 	ws := newWorkspace(t, newRepo(t), r)
 	if err := ws.Commit(context.Background(), "T-001", "feat(T-001): 記事を公開する", workspace.Author{Name: "人", Email: "h@example.invalid"}); err != nil {
 		t.Fatalf("Commit: %v", err)
@@ -295,5 +296,92 @@ func TestImport_NotFastForward(t *testing.T) {
 	}
 	if got := git(t, project, "log", "-1", "--format=%s", "feature/t-001-x"); got != "人の変更" {
 		t.Errorf("人のブランチが変わった: %q", got)
+	}
+}
+
+// コミットは、作ったコミットのハッシュを返す。変更がなければ今の HEAD を返す（コミットしない）。
+func TestCommit_ReturnsHash(t *testing.T) {
+	r := &fakeRunner{replies: []reply{{stdout: []byte("committed 1111111111111111111111111111111111111111\n")}, {stdout: []byte("unchanged 2222222222222222222222222222222222222222\n")}}}
+	ws := newWorkspace(t, newRepo(t), r)
+	a := workspace.Author{Name: "人", Email: "h@example.invalid"}
+	hash, changed, err := ws.CommitHash(context.Background(), "T-001", "feat(T-001): x", a)
+	if err != nil || hash != "1111111111111111111111111111111111111111" || !changed {
+		t.Errorf("hash, changed, err = %q, %v, %v", hash, changed, err)
+	}
+	hash, changed, err = ws.CommitHash(context.Background(), "T-001", "feat(T-001): x", a)
+	if err != nil || hash != "2222222222222222222222222222222222222222" || changed {
+		t.Errorf("変更なし: hash, changed, err = %q, %v, %v", hash, changed, err)
+	}
+	if !strings.Contains(strings.Join(r.specs[0].Cmd, " "), "unchanged") {
+		t.Error("変更がないときの扱いがスクリプトにない")
+	}
+}
+
+// 書き出しは、clone の HEAD を tar で受け取り、ホストのディレクトリに展開して、その版のハッシュを返す。
+func TestExport(t *testing.T) {
+	project := newRepo(t)
+	head := git(t, project, "rev-parse", "HEAD")
+	archive := filepath.Join(t.TempDir(), "a.tar")
+	git(t, project, "archive", "--format=tar", "-o", archive, "HEAD")
+	tarData, _ := os.ReadFile(archive)
+	r := &fakeRunner{replies: []reply{{stdout: append([]byte(head+"\n"), tarData...)}}}
+	ws := newWorkspace(t, project, r)
+	dest := filepath.Join(t.TempDir(), "export")
+
+	hash, err := ws.Export(context.Background(), "T-001", dest)
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if hash != head {
+		t.Errorf("hash = %q, want %q", hash, head)
+	}
+	if data, err := os.ReadFile(filepath.Join(dest, "README.md")); err != nil || string(data) != "x\n" {
+		t.Errorf("展開した README.md = %q, %v", data, err)
+	}
+	if spec := r.specs[0]; spec.Network != "none" || !strings.Contains(strings.Join(spec.Cmd, " "), "git archive") {
+		t.Errorf("書き出しのコンテナ = %+v", spec)
+	}
+	if m, ok := mountFor(r.specs[0], "/work"); !ok || !m.ReadOnly {
+		t.Error("書き出しは clone を読み取り専用で使う")
+	}
+}
+
+// 展開は、書き出し先の外へのパスを拒む。
+func TestExport_RejectsEscapingPaths(t *testing.T) {
+	var buf bytes.Buffer
+	buf.WriteString("3333333333333333333333333333333333333333\n")
+	tw := tar.NewWriter(&buf)
+	tw.WriteHeader(&tar.Header{Name: "../evil.txt", Mode: 0o644, Size: 1})
+	tw.Write([]byte("x"))
+	tw.Close()
+	ws := newWorkspace(t, newRepo(t), &fakeRunner{replies: []reply{{stdout: buf.Bytes()}}})
+	if _, err := ws.Export(context.Background(), "T-001", filepath.Join(t.TempDir(), "export")); err == nil {
+		t.Fatal("外へのパスを展開した")
+	}
+}
+
+func TestDiffAndTreeHash(t *testing.T) {
+	r := &fakeRunner{replies: []reply{{stdout: []byte("diff --git a/x b/x\n")}, {stdout: []byte("4444444444444444444444444444444444444444\n")}}}
+	ws := newWorkspace(t, newRepo(t), r)
+	diff, err := ws.Diff(context.Background(), "T-001", "main")
+	if err != nil || !strings.HasPrefix(diff, "diff --git") {
+		t.Errorf("Diff = %q, %v", diff, err)
+	}
+	if r.specs[0].Env["BASE"] != "main" {
+		t.Errorf("Diff の BASE = %q", r.specs[0].Env["BASE"])
+	}
+	tree, err := ws.TreeHash(context.Background(), "T-001")
+	if err != nil || tree != "4444444444444444444444444444444444444444" {
+		t.Errorf("TreeHash = %q, %v", tree, err)
+	}
+}
+
+// BJ には clone を .git を含めてすべて読み取り専用で渡す。
+func TestReviewerMounts(t *testing.T) {
+	ws := newWorkspace(t, newRepo(t), &fakeRunner{})
+	for _, m := range ws.ReviewerMounts("T-001") {
+		if !m.ReadOnly {
+			t.Errorf("BJ のマウント %s が書き込み可", m.Target)
+		}
 	}
 }
