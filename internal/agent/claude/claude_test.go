@@ -47,6 +47,10 @@ func TestAuthAndEnv(t *testing.T) {
 		t.Errorf("AuthMount = %+v", m)
 	}
 	env := a.Env()
+	// アカウントの外部の連携（MCP の中継）は読み込まない（M2 の Q-16）
+	if env["ENABLE_CLAUDEAI_MCP_SERVERS"] != "false" {
+		t.Errorf("MCP の中継を止めていない: %v", env)
+	}
 	if env["CLAUDE_CONFIG_DIR"] != "/auth" || env["DISABLE_AUTOUPDATER"] != "1" || env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] != "1" {
 		t.Errorf("Env = %v", env)
 	}

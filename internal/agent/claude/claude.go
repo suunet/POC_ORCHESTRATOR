@@ -41,6 +41,8 @@ func (Agent) Env() map[string]string {
 		"DISABLE_TELEMETRY":                        "1",
 		"DISABLE_ERROR_REPORTING":                  "1",
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+		// アカウントの外部の連携（MCP の中継）を読み込まない。プロキシの拒否は構造の担保として残す
+		"ENABLE_CLAUDEAI_MCP_SERVERS": "false",
 	}
 }
 
