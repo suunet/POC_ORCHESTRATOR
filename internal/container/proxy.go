@@ -16,6 +16,9 @@ import (
 //
 // エージェントは外への経路のない内部ネットワークに置き、このプロキシだけを出口にする。
 // HTTPS の中身は見えないので、判定はホストとポートの組だけで行う。平文の HTTP の転送は通さない。
+//
+// NOTE: プロキシは FROM scratch のイメージで動かす（docker/proxy.Dockerfile）。自分で TLS を張らないので
+// CA 証明書は要らず、名前の解決は Go の純正のリゾルバで行う。外へ TLS を張る変更をしたら、イメージを見直す
 type Proxy struct {
 	allow map[string]bool
 	dial  func(network, addr string) (net.Conn, error)

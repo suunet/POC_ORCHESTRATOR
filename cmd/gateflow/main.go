@@ -5,9 +5,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"strings"
 
 	"gateflow/internal/config"
+	"gateflow/internal/container"
 	"gateflow/internal/idcheck"
 )
 
@@ -40,6 +43,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "version":
 		fmt.Fprintf(stdout, "gateflow %s\n", version)
 		return exitOK
+	case "proxy":
+		return proxy(args[1:], stdout, stderr)
 	case "check":
 		rest := args[1:]
 		if len(rest) > 0 && rest[0] == "ids" {
@@ -87,6 +92,35 @@ func checkIDs(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "ID整合チェック: 定義 %d件（子 %d件）、必須 %d件、推奨 %d件\n",
 		res.Definitions, res.Children, required, recommended)
 	if res.HasErrors() {
+		return exitFailed
+	}
+	return exitOK
+}
+
+// proxy は、許可リストのプロキシとして動く（内部用。プロキシのコンテナの中で動かす）。判定の記録は stdout に書く。
+func proxy(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("proxy", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	listen := fs.String("listen", ":3128", "待ち受けるアドレス")
+	allow := fs.String("allow", "", "許可する host:port（カンマ区切り）")
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if fs.NArg() > 0 || *listen == "" {
+		fmt.Fprintln(stderr, "使い方: gateflow proxy [--listen <アドレス>] [--allow <host:port>,...]")
+		return exitUsage
+	}
+	var hosts []string
+	if *allow != "" {
+		hosts = strings.Split(*allow, ",")
+	}
+	p, err := container.NewProxy(hosts, stdout)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
+	if err := http.ListenAndServe(*listen, p); err != nil {
+		fmt.Fprintln(stderr, err)
 		return exitFailed
 	}
 	return exitOK

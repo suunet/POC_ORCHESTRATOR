@@ -86,3 +86,24 @@ func TestRun_CheckIDs_BadConfig(t *testing.T) {
 		t.Errorf("code=%d err=%q", code, errOut)
 	}
 }
+
+// proxy は内部用なので、使い方には出さない。
+func TestRun_ProxyHiddenFromUsage(t *testing.T) {
+	_, _, errOut := runCmd()
+	if strings.Contains(errOut, "proxy") {
+		t.Errorf("使い方に proxy が出ている: %q", errOut)
+	}
+}
+
+func TestRun_ProxyInvalidArgs(t *testing.T) {
+	for _, args := range [][]string{
+		{"proxy", "--allow", "no-port"},
+		{"proxy", "--listen", ""},
+		{"proxy", "extra"},
+	} {
+		code, _, errOut := runCmd(args...)
+		if code != exitUsage || errOut == "" || strings.Contains(errOut, "知らないコマンド") {
+			t.Errorf("args=%v code=%d err=%q", args, code, errOut)
+		}
+	}
+}
