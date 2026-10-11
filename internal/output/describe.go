@@ -36,8 +36,11 @@ func describeStruct(b *strings.Builder, t reflect.Type, prefix string) {
 			fmt.Fprintf(b, "。選択肢：%s", strings.Join(vals, "・"))
 		}
 		b.WriteString("\n")
-		if et := f.Type; et.Kind() == reflect.Slice && et.Elem().Kind() == reflect.Struct {
+		switch et := f.Type; {
+		case et.Kind() == reflect.Slice && et.Elem().Kind() == reflect.Struct:
 			describeStruct(b, et.Elem(), path+"[].")
+		case et.Kind() == reflect.Pointer && et.Elem().Kind() == reflect.Struct:
+			describeStruct(b, et.Elem(), path+".")
 		}
 	}
 }
@@ -46,6 +49,11 @@ func typeName(t reflect.Type) string {
 	switch t.Kind() {
 	case reflect.String:
 		return "文字列"
+	case reflect.Pointer:
+		if t.Elem().Kind() == reflect.Struct {
+			return "オブジェクト"
+		}
+		return typeName(t.Elem())
 	case reflect.Slice:
 		if t.Elem().Kind() == reflect.Struct {
 			return "オブジェクトの配列"

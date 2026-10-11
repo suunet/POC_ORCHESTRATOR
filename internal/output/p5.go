@@ -21,11 +21,18 @@ const (
 	OutcomeBlocked    = "blocked"
 )
 
-// blocked の理由の選択肢。
+// blocked の理由の種類。どれにも当たらなければ other にし、detail に書く。
 const (
 	BlockScope      = "scope"      // 指示書の範囲の外の変更が必要
 	BlockDependency = "dependency" // 依存の追加が必要
+	BlockOther      = "other"      // そのほか（指示書が曖昧で判断できない、必要な情報が読めない、など）
 )
+
+// BlockReason は、outcome が blocked のときの理由。
+type BlockReason struct {
+	Kind   string `json:"kind" desc:"理由の種類。scope は指示書の範囲の外の変更が必要、dependency は依存の追加が必要、other はそのほか" enum:"scope,dependency,other"`
+	Detail string `json:"detail" desc:"何に阻まれたか（どの種類でも書く）"`
+}
 
 // Question は、人に確かめたいこと。空でなければ質疑に登録する。
 type Question struct {
@@ -48,7 +55,7 @@ type P5Result struct {
 	Notes         []string      `json:"notes,omitempty" desc:"補足（気づいたが扱わなかったことなど）"`
 	Tests         []TestMapping `json:"tests,omitempty" desc:"書いたテストと受入条件の対応。outcome が done なら1件以上"`
 	ChangedSheets []string      `json:"changedSheets,omitempty" desc:"更新した文書（指示書の§4.4に挙がったものだけ）"`
-	BlockReason   string        `json:"blockReason,omitempty" desc:"outcome が blocked のときの理由。scope は指示書の範囲の外の変更が必要、dependency は依存の追加が必要" enum:"scope,dependency"`
+	BlockReason   *BlockReason  `json:"blockReason,omitempty" desc:"outcome が blocked のときの理由（blocked のときだけ書く）"`
 }
 
 // ParseP5 は、P5 の出力を読み込んで検査する。誤りはまとめて返す。
@@ -94,12 +101,20 @@ func (r *P5Result) validate() []error {
 		}
 	}
 	switch {
-	case r.Outcome == OutcomeBlocked && r.BlockReason == "":
+	case r.Outcome == OutcomeBlocked && r.BlockReason == nil:
 		errs = append(errs, errors.New("outcome が blocked なのに blockReason がない"))
-	case r.Outcome != OutcomeBlocked && r.BlockReason != "":
+	case r.Outcome != OutcomeBlocked && r.BlockReason != nil:
 		errs = append(errs, fmt.Errorf("outcome が %s なのに blockReason がある", r.Outcome))
-	case r.BlockReason != "" && !slices.Contains([]string{BlockScope, BlockDependency}, r.BlockReason):
-		errs = append(errs, fmt.Errorf("blockReason %q は scope・dependency のどれでもない", r.BlockReason))
+	case r.BlockReason != nil:
+		switch k := r.BlockReason.Kind; {
+		case k == "":
+			errs = append(errs, errors.New("blockReason.kind がない"))
+		case !slices.Contains([]string{BlockScope, BlockDependency, BlockOther}, k):
+			errs = append(errs, fmt.Errorf("blockReason.kind %q は scope・dependency・other のどれでもない", k))
+		}
+		if r.BlockReason.Detail == "" {
+			errs = append(errs, errors.New("blockReason.detail がない"))
+		}
 	}
 	return errs
 }

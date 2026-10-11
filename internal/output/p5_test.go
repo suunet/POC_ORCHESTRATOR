@@ -26,12 +26,12 @@ func TestParseP5_Done(t *testing.T) {
 }
 
 func TestParseP5_Blocked(t *testing.T) {
-	data := `{"outcome": "blocked", "summary": "依存の追加が必要", "blockReason": "dependency"}`
+	data := `{"outcome": "blocked", "summary": "依存の追加が必要", "blockReason": {"kind": "dependency", "detail": "HTTP のフレームワークが go.mod にない"}}`
 	r, err := output.ParseP5([]byte(data))
 	if err != nil {
 		t.Fatalf("ParseP5: %v", err)
 	}
-	if r.Outcome != output.OutcomeBlocked || r.BlockReason != output.BlockDependency {
+	if r.Outcome != output.OutcomeBlocked || r.BlockReason == nil || r.BlockReason.Kind != output.BlockDependency || r.BlockReason.Detail == "" {
 		t.Errorf("result = %+v", r)
 	}
 }
@@ -49,8 +49,11 @@ func TestParseP5_Invalid(t *testing.T) {
 		{"done なのにテストがない", `{"outcome": "done", "summary": "s"}`, []string{"tests"}},
 		{"テストの項目が欠けている", `{"outcome": "done", "summary": "s", "tests": [{"test": ""}]}`, []string{"tests[0].test", "tests[0].file"}},
 		{"blocked なのに理由がない", `{"outcome": "blocked", "summary": "s"}`, []string{"blockReason"}},
-		{"blockReason が選択肢にない", `{"outcome": "blocked", "summary": "s", "blockReason": "tired"}`, []string{"tired"}},
-		{"done なのに blockReason がある", `{"outcome": "done", "summary": "s", "tests": [{"test": "T", "file": "f"}], "blockReason": "scope"}`, []string{"blockReason"}},
+		{"blockReason.kind が選択肢にない", `{"outcome": "blocked", "summary": "s", "blockReason": {"kind": "tired", "detail": "d"}}`, []string{"tired"}},
+		{"blockReason.detail がない", `{"outcome": "blocked", "summary": "s", "blockReason": {"kind": "other"}}`, []string{"blockReason.detail"}},
+		{"blockReason.kind がない", `{"outcome": "blocked", "summary": "s", "blockReason": {"detail": "d"}}`, []string{"blockReason.kind"}},
+		{"blockReason が文字列", `{"outcome": "blocked", "summary": "s", "blockReason": "scope"}`, []string{"JSON"}},
+		{"done なのに blockReason がある", `{"outcome": "done", "summary": "s", "tests": [{"test": "T", "file": "f"}], "blockReason": {"kind": "scope", "detail": "d"}}`, []string{"blockReason"}},
 		{"質問の本文がない", `{"outcome": "test_defect", "summary": "s", "questions": [{"text": ""}]}`, []string{"questions[0].text"}},
 	}
 	for _, tc := range cases {
@@ -76,7 +79,8 @@ func TestDescribeP5(t *testing.T) {
 		"`outcome`", "`done`", "`test_defect`", "`blocked`",
 		"`summary`", "`questions`", "`notes`",
 		"`tests`", "`tests[].test`", "`tests[].file`", "`tests[].acceptance`",
-		"`changedSheets`", "`blockReason`", "`dependency`", "`scope`",
+		"`changedSheets`", "`blockReason`", "`blockReason.kind`", "`blockReason.detail`",
+		"`scope`", "`dependency`", "`other`",
 	} {
 		if !strings.Contains(d, w) {
 			t.Errorf("説明に %s がない:\n%s", w, d)
