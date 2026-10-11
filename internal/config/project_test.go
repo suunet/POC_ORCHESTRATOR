@@ -24,7 +24,7 @@ func writeProject(t *testing.T, body string) string {
 }
 
 const validProject = `{
-  "formatVersion": 1,
+  "formatVersion": 2,
   "name": "article-app",
   "branch": {"main": "main"},
   "agent": {"dockerfile": ".gateflow/agent.Dockerfile", "envTemplate": ".gateflow/env.template", "allow": ["example.internal:443"]},
@@ -118,14 +118,18 @@ func TestLoadProject_Invalid(t *testing.T) {
 		want []string
 	}{
 		{"書式のバージョンがない", projectWith(t, "formatVersion", ""), []string{"formatVersion"}},
-		{"書式のバージョン0は拒否する", projectWith(t, "formatVersion", "0"), []string{"formatVersion", "0"}},
-		{"必須の項目がない", `{"formatVersion": 1}`, []string{"name", "branch", "agent", "verify", "ids", "policies"}},
+		{"書式のバージョン1は拒否する", projectWith(t, "formatVersion", "1"), []string{"formatVersion", "1"}},
+		{"必須の項目がない", `{"formatVersion": 2}`, []string{"name", "branch", "agent", "verify", "ids", "policies"}},
 		{"知らない項目", projectWith(t, "issue", `"x"`), []string{"issue"}},
 		{"名前の形が違う", projectWith(t, "name", `"Article_App"`), []string{"Article_App"}},
 		{"main のブランチがない", projectWith(t, "branch", `{}`), []string{"branch.main"}},
 		{"エージェントの項目の誤り", projectWith(t, "agent", `{"dockerfile": "/etc/x", "envTemplate": "../env", "allow": ["example.com", "a b:443"]}`),
 			[]string{"agent.dockerfile", "/etc/x", "agent.envTemplate", "../env", "example.com", "a b:443"}},
 		{"依存の取得の項目の誤り", projectWith(t, "deps", `{"command": "", "cacheEnv": "go-mod"}`), []string{"deps.command", "go-mod"}},
+		{"上限の誤り", projectWith(t, "limits", `{"steps": -5, "loops": -1}`), []string{"limits.steps", "limits.loops"}},
+		{"Issue の誤り", projectWith(t, "issue", `{"tracker": "jira", "commitRef": "#{id}"}`), []string{"jira"}},
+		{"Issue の書式に {id} がない", projectWith(t, "issue", `{"tracker": "github", "commitRef": "#123"}`), []string{"commitRef"}},
+		{"遷移表の名前の誤り", projectWith(t, "workflow", `"../x"`), []string{"workflow"}},
 		{"検証コマンドがない", projectWith(t, "verify", `{"build": "go build ./..."}`), []string{"verify.test", "verify.lint"}},
 		{
 			name: "プレフィックスの誤りをまとめて報告する",
@@ -158,5 +162,47 @@ func TestLoadProject_Invalid(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// 上限・遷移表・Issue は任意。ない項目は設計の初期値を使う。
+func TestLoadProject_Defaults(t *testing.T) {
+	p, err := config.LoadProject(writeProject(t, validProject))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.WorkflowName() != "aidd-impl" {
+		t.Errorf("WorkflowName = %q", p.WorkflowName())
+	}
+	l := p.EffectiveLimits()
+	if l.Steps != 20 || l.Loops != 3 || l.IdleMinutes != 10 || l.RunMinutes != 60 {
+		t.Errorf("EffectiveLimits = %+v", l)
+	}
+	if p.Issue != nil {
+		t.Errorf("Issue = %+v", p.Issue)
+	}
+}
+
+func TestLoadProject_LimitsAndIssue(t *testing.T) {
+	body := projectWith(t, "limits", `{"steps": 30, "idleMinutes": 5}`)
+	root := writeProject(t, body)
+	data, _ := os.ReadFile(filepath.Join(root, config.ProjectFile))
+	var m map[string]json.RawMessage
+	json.Unmarshal(data, &m)
+	m["issue"] = json.RawMessage(`{"tracker": "github", "commitRef": "#{id}", "prRef": "Refs #{id}"}`)
+	m["workflow"] = json.RawMessage(`"aidd-impl"`)
+	out, _ := json.Marshal(m)
+	os.WriteFile(filepath.Join(root, config.ProjectFile), out, 0o644)
+
+	p, err := config.LoadProject(root)
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	l := p.EffectiveLimits()
+	if l.Steps != 30 || l.Loops != 3 || l.IdleMinutes != 5 || l.RunMinutes != 60 {
+		t.Errorf("EffectiveLimits = %+v（ない項目は初期値）", l)
+	}
+	if got := p.Issue.Format(p.Issue.CommitRef, "123"); got != "#123" {
+		t.Errorf("Format = %q", got)
 	}
 }

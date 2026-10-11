@@ -13,8 +13,8 @@ import (
 )
 
 // FormatVersion は、このgateflowが読める project.json の書式のバージョン。
-// 1 で name・branch・agent・deps・verify を足した。古い書式は自動で変換せず拒否する。
-const FormatVersion = 1
+// 1 で name・branch・agent・deps・verify を、2 で workflow・limits・issue を足した。古い書式は自動で変換せず拒否する。
+const FormatVersion = 2
 
 // ProjectFile は、プロジェクトのルートから見た設定ファイルの場所。
 const ProjectFile = ".gateflow/project.json"
@@ -34,6 +34,9 @@ type Project struct {
 	Agent           *Agent   `json:"agent"`
 	Deps            *Deps    `json:"deps,omitempty"`
 	Verify          *Verify  `json:"verify"`
+	Workflow        string   `json:"workflow,omitempty"`
+	Limits          *Limits  `json:"limits,omitempty"`
+	Issue           *Issue   `json:"issue,omitempty"`
 	IDs             *IDs     `json:"ids"`
 	Policies        []Policy `json:"policies"`
 }
@@ -63,6 +66,56 @@ type Deps struct {
 	Command string `json:"command"`
 	// CacheEnv は、取得した依存の置き場所を渡す環境変数の名前（例：GOMODCACHE）。
 	CacheEnv string `json:"cacheEnv"`
+}
+
+// Limits は、暴走防止の上限。ない項目（0）は設計の初期値を使う。
+type Limits struct {
+	Steps       int `json:"steps,omitempty"`       // チケット1回の実行全体の step の数
+	Loops       int `json:"loops,omitempty"`       // ループの往復（種類ごと）
+	IdleMinutes int `json:"idleMinutes,omitempty"` // エージェントの無反応
+	RunMinutes  int `json:"runMinutes,omitempty"`  // エージェントの1回の実行時間
+}
+
+// 上限の初期値（設計の「暴走防止と通知」）。
+var defaultLimits = Limits{Steps: 20, Loops: 3, IdleMinutes: 10, RunMinutes: 60}
+
+// EffectiveLimits は、設定の値と初期値を合わせた上限を返す。
+func (p *Project) EffectiveLimits() Limits {
+	l := defaultLimits
+	if p.Limits != nil {
+		for _, f := range []struct {
+			dst *int
+			v   int
+		}{
+			{&l.Steps, p.Limits.Steps}, {&l.Loops, p.Limits.Loops},
+			{&l.IdleMinutes, p.Limits.IdleMinutes}, {&l.RunMinutes, p.Limits.RunMinutes},
+		} {
+			if f.v > 0 {
+				*f.dst = f.v
+			}
+		}
+	}
+	return l
+}
+
+// WorkflowName は、使う遷移表の名前（既定は aidd-impl）。
+func (p *Project) WorkflowName() string {
+	if p.Workflow == "" {
+		return "aidd-impl"
+	}
+	return p.Workflow
+}
+
+// Issue は、外部のチケット管理への参照の書式。外部の API は使わず、課題の番号は指示書の欄に人が書く。
+type Issue struct {
+	Tracker   string `json:"tracker"`             // github・backlog・none
+	CommitRef string `json:"commitRef,omitempty"` // コミットメッセージの末尾に足す書式（例：#{id}）
+	PRRef     string `json:"prRef,omitempty"`     // PR の本文の書式（例：Refs #{id}）。gateflow は表示だけ
+}
+
+// Format は、書式 format の {id} を id に置き換える。
+func (i *Issue) Format(format, id string) string {
+	return strings.ReplaceAll(format, "{id}", id)
 }
 
 // Verify は、検証コマンドの対応表。どれも必須のレベルで、検証用のコンテナで実行する。
@@ -181,6 +234,34 @@ func (p *Project) validate() []error {
 		for _, c := range []struct{ name, cmd string }{{"build", p.Verify.Build}, {"test", p.Verify.Test}, {"lint", p.Verify.Lint}} {
 			if c.cmd == "" {
 				errs = append(errs, fmt.Errorf("verify.%s がない", c.name))
+			}
+		}
+	}
+	if p.Workflow != "" && !namePattern.MatchString(p.Workflow) {
+		errs = append(errs, fmt.Errorf("workflow %q は遷移表の名前（英小文字・数字・ハイフン）でない", p.Workflow))
+	}
+	if l := p.Limits; l != nil {
+		for _, f := range []struct {
+			name string
+			v    int
+		}{{"steps", l.Steps}, {"loops", l.Loops}, {"idleMinutes", l.IdleMinutes}, {"runMinutes", l.RunMinutes}} {
+			if f.v < 0 {
+				errs = append(errs, fmt.Errorf("limits.%s %d は負の数", f.name, f.v))
+			}
+		}
+		if l.Steps == 0 && l.Loops == 0 && l.IdleMinutes == 0 && l.RunMinutes == 0 {
+			errs = append(errs, errors.New("limits に値がない（limits.steps などを書くか、limits ごと消す）"))
+		}
+	}
+	if i := p.Issue; i != nil {
+		switch i.Tracker {
+		case "github", "backlog", "none":
+		default:
+			errs = append(errs, fmt.Errorf("issue.tracker %q は github・backlog・none のどれでもない", i.Tracker))
+		}
+		for _, f := range []struct{ name, v string }{{"commitRef", i.CommitRef}, {"prRef", i.PRRef}} {
+			if f.v != "" && !strings.Contains(f.v, "{id}") {
+				errs = append(errs, fmt.Errorf("issue.%s %q に {id} がない", f.name, f.v))
 			}
 		}
 	}
