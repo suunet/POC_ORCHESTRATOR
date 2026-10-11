@@ -1,0 +1,38 @@
+{
+  "name": "aidd-impl",
+  "states": ["draft", "ready-to-prepare", "ready-to-approve", "ready-to-implement", "implementing", "ready-for-review", "cancelled"],
+  "terminal": ["ready-for-review", "cancelled"],
+  "human": [
+    {"command": "ready", "from": ["draft"], "to": "ready-to-prepare", "guards": ["questions-resolved"]},
+    {"command": "approve", "from": ["ready-to-approve"], "to": "ready-to-implement", "guards": ["approval-checked"]},
+    {"command": "cancel", "from": ["draft", "ready-to-prepare", "ready-to-approve", "ready-to-implement", "implementing"], "to": "cancelled"}
+  ],
+  "auto": [
+    {"from": "ready-to-prepare", "start": "p2-review"},
+    {"from": "ready-to-implement", "to": "implementing", "start": "p5"}
+  ],
+  "steps": {
+    "p2-review": {"agent": "bj", "on": {
+      "approved": {"next": "p3-prepare"},
+      "needs_fix": {"actions": ["findings-to-questions"], "to": "draft"}
+    }},
+    "p3-prepare": {"agent": "dev", "on": {
+      "done": {"actions": ["write-sections", "check-sections", "check-acceptance", "check-ids", "commit", "import"], "to": "ready-to-approve"},
+      "needs_answer": {"actions": ["questions-from-output"], "to": "draft"}
+    }},
+    "p5": {"agent": "dev", "on": {
+      "done": {"next": "verify"},
+      "test_defect": {"stop": "human"},
+      "blocked": {"stop": "human"}
+    }},
+    "verify": {"check": "verify-commands", "on": {
+      "passed": {"actions": ["commit"], "next": "p5-verify"},
+      "failed": {"loop": "p5", "counter": "verify"}
+    }},
+    "p5-verify": {"agent": "bj", "on": {
+      "approved": {"actions": ["check-ids", "import"], "to": "ready-for-review"},
+      "needs_fix": {"loop": "p5", "counter": "review"},
+      "needs_human": {"stop": "human"}
+    }}
+  }
+}

@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-//go:embed templates prompts
+//go:embed templates prompts workflows
 var files embed.FS
 
 // FS は、組み込みのファイルを返す。
