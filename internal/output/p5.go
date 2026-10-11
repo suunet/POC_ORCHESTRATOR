@@ -4,8 +4,6 @@
 package output
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -60,11 +58,9 @@ type P5Result struct {
 
 // ParseP5 は、P5 の出力を読み込んで検査する。誤りはまとめて返す。
 func ParseP5(data []byte) (*P5Result, error) {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
 	var r P5Result
-	if err := dec.Decode(&r); err != nil {
-		return nil, fmt.Errorf("出力が JSON として正しくない: %w", err)
+	if err := decodeStrict(data, &r); err != nil {
+		return nil, err
 	}
 	if errs := r.validate(); len(errs) > 0 {
 		return nil, fmt.Errorf("出力の内容が正しくない:\n%w", errors.Join(errs...))
@@ -95,11 +91,7 @@ func (r *P5Result) validate() []error {
 			errs = append(errs, fmt.Errorf("tests[%d].file がない", i))
 		}
 	}
-	for i, q := range r.Questions {
-		if q.Text == "" {
-			errs = append(errs, fmt.Errorf("questions[%d].text がない", i))
-		}
-	}
+	errs = append(errs, validateQuestions(r.Questions)...)
 	switch {
 	case r.Outcome == OutcomeBlocked && r.BlockReason == nil:
 		errs = append(errs, errors.New("outcome が blocked なのに blockReason がない"))
