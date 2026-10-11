@@ -14,6 +14,8 @@ func TestFS_Frames(t *testing.T) {
 		"templates/catalog/supplement/README.md",
 		"templates/ticket/ticket.md",
 		"prompts/policies/test-first.md",
+		"prompts/personas/dev.md",
+		"prompts/instructions/p5.md",
 		"prompts/policies/supplement/README.md",
 	} {
 		if _, err := fs.Stat(builtins.FS(), path); err != nil {
