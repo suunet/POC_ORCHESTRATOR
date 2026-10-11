@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -458,7 +459,7 @@ func cmdDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		return exitFailed
 	}
 	fmt.Fprintln(stdout, "エージェントと同じ構成のサンドボックスで確かめています…")
-	sb := &engine.Sandbox{Root: dir, Project: s.project, AgentImage: agentTag, Agent: s.agent,
+	sb := &engine.Sandbox{Root: dir, Project: s.project, AgentImage: agentTag, WorkVolume: ws.Volume(), Agent: s.agent,
 		Workspace: ws, Egress: egress, Runner: s.docker}
 	results, err := sb.Run(ctx)
 	if err != nil {
@@ -477,10 +478,43 @@ func cmdDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int
 			want = "成功する"
 		}
 		fmt.Fprintf(stdout, "%s [%s] %s（%sこと。終了コード %d）\n", mark, r.Group, r.Desc, want, r.ExitCode)
+		if r.Advice != "" {
+			fmt.Fprintf(stdout, "    直し方：%s\n", r.Advice)
+		}
 	}
 	fmt.Fprintf(stdout, "サンドボックスの確認：%d件中 不合格 %d件\n", len(results), failed)
+	printProxyLog(stdout, dir, sb.ProxyLog)
 	if failed > 0 {
 		return exitFailed
 	}
 	return exitOK
+}
+
+// printProxyLog は、プロキシの判定の記録を数えて表示し、Git 管理外の .docs/_stash/doctor/ に保存する。
+func printProxyLog(w io.Writer, dir string, log []byte) {
+	counts := map[string]int{}
+	var keys []string
+	for _, line := range strings.Split(string(log), "\n") {
+		var rec struct{ Decision, Method, Target string }
+		if json.Unmarshal([]byte(line), &rec) != nil || rec.Decision == "" {
+			continue
+		}
+		k := rec.Decision + " " + rec.Method + " " + rec.Target
+		if counts[k] == 0 {
+			keys = append(keys, k)
+		}
+		counts[k]++
+	}
+	sort.Strings(keys)
+	fmt.Fprintln(w, "プロキシの判定：")
+	for _, k := range keys {
+		fmt.Fprintf(w, "  %3d %s\n", counts[k], k)
+	}
+	saveDir := filepath.Join(dir, ".docs", "_stash", "doctor")
+	if err := os.MkdirAll(saveDir, 0o755); err == nil {
+		path := filepath.Join(saveDir, time.Now().UTC().Format("20060102-150405")+"-proxy.log")
+		if os.WriteFile(path, log, 0o644) == nil {
+			fmt.Fprintf(w, "  記録：%s\n", path)
+		}
+	}
 }

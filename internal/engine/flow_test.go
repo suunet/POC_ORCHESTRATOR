@@ -592,6 +592,6 @@ func (e *fakeEgress) Start(context.Context, []string) (string, error) {
 }
 func (e *fakeEgress) Stop(context.Context) ([]byte, error) {
 	e.stopped = true
-	return nil, nil
+	return []byte("{\"decision\":\"deny\"}\n"), nil
 }
 func (e *fakeEgress) Network() string { return "gateflow-sample-internal" }

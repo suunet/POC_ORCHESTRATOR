@@ -43,6 +43,7 @@ func newSandbox(t *testing.T, r *probeRunner) *engine.Sandbox {
 			Deps:   &config.Deps{Command: "go mod download", CacheEnv: "GOMODCACHE"},
 		},
 		AgentImage: "gateflow-agent-sample:v1",
+		WorkVolume: "gateflow-work-sample",
 		Agent:      &mock.Agent{},
 		Workspace:  &flowWorkspace{},
 		Egress:     &fakeEgress{},
@@ -85,6 +86,36 @@ func TestSandbox_AllPass(t *testing.T) {
 		!mounts["/work/.git"] || !mounts["/work/.env"] || mounts["/work"] {
 		t.Errorf("サンドボックスの構成がエージェントと違う: %+v", s)
 	}
+	// 持ち主の検査のため、作業用のボリュームの根元を読み取り専用で見る
+	if ro, ok := mounts["/check/vol"]; !ok || !ro {
+		t.Errorf("作業用のボリュームの根元をマウントしていない: %+v", s.Mounts)
+	}
+}
+
+// 持ち主の検査に不合格なら、直し方の案内を付ける。プロキシの判定の記録を残す。
+func TestSandbox_OwnerAdvice(t *testing.T) {
+	r := &probeRunner{result: func(id string) int {
+		if id == "owner-volumes" || id == "allowed-host-reachable" || id == "no-credentials" || id == "owner-mounts" {
+			if id == "owner-volumes" {
+				return 1
+			}
+			return 0
+		}
+		return 1
+	}}
+	sb := newSandbox(t, r)
+	checks, err := sb.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range checks {
+		if c.ID == "owner-volumes" && (c.Passed || !strings.Contains(c.Advice, "gateflow-work-sample")) {
+			t.Errorf("owner-volumes = %+v", c)
+		}
+	}
+	if sb.ProxyLog == nil {
+		t.Error("プロキシの判定の記録を残していない")
+	}
 }
 
 // 外へ出られてしまった確認は不合格になる。
@@ -116,7 +147,7 @@ func TestSandboxChecks_Coverage(t *testing.T) {
 			t.Errorf("%s の中身がない", c.ID)
 		}
 	}
-	for _, g := range []string{"push", "post", "module", "env"} {
+	for _, g := range []string{"push", "post", "module", "env", "owner"} {
 		if !groups[g] {
 			t.Errorf("%s の確認がない", g)
 		}

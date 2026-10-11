@@ -15,6 +15,7 @@ import (
 
 	"gateflow/internal/agent"
 	"gateflow/internal/config"
+	"gateflow/internal/container"
 )
 
 // Check は、サンドボックスで試す1つのこと。Expect が fail なら失敗すること、ok なら成功することを確かめる。
@@ -26,11 +27,12 @@ type Check struct {
 	Cmd    string
 }
 
-// CheckResult は、1つの確認の結果。
+// CheckResult は、1つの確認の結果。Advice は、不合格のときの直し方の案内（自動では直さない）。
 type CheckResult struct {
 	Check
 	ExitCode int
 	Passed   bool
+	Advice   string
 }
 
 // SandboxChecks は、完了の基準の 4.2〜4.4 で試すことの一覧。コマンドはエージェントのコンテナの /work で実行する。
@@ -61,6 +63,12 @@ func SandboxChecks() []Check {
 		fail("env-move", "env", ".env の名前を変える", `mv .env .env.moved`),
 		fail("env-chmod", "env", ".env の権限を変える", `chmod 666 .env`),
 		fail("sudo", "env", "sudo で権限を上げる", `sudo true`),
+		// NOTE: 空のボリューム（またはその空のサブパス）をマウントすると、イメージのディレクトリの持ち主が写る。
+		// root の持ち主になると、root でない利用者は書けない（M1 の /auth・/cache の誤り）
+		ok("owner-mounts", "owner", "エージェントのマウント先（/vol・/work・/cache・/auth）の持ち主が root でない利用者",
+			`for d in /vol /work /cache /auth; do [ "$(stat -c %U "$d")" = "$(id -un)" ] || exit 1; done`),
+		ok("owner-volumes", "owner", "作業用のボリュームの根元とチケットごとのディレクトリの持ち主が root でない利用者",
+			`[ "$(stat -c %U /check/vol)" = "$(id -un)" ] || exit 1; for d in /check/vol/*/ /check/vol/*/repo /check/vol/*/cache /check/vol/*/main; do [ -e "$d" ] || continue; [ "$(stat -c %U "$d")" = "$(id -un)" ] || exit 1; done`),
 	}
 }
 
@@ -69,10 +77,13 @@ type Sandbox struct {
 	Root       string
 	Project    *config.Project
 	AgentImage string
+	WorkVolume string // 作業用のボリューム（持ち主の検査で根元を見る）
 	Agent      agent.Agent
 	Workspace  Workspace
 	Egress     Egress
 	Runner     Runner
+
+	ProxyLog []byte // 実行の後に、プロキシの判定の記録を入れる
 }
 
 const sandboxTicket = "doctor"
@@ -96,7 +107,9 @@ func (s *Sandbox) Run(ctx context.Context) ([]CheckResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer s.Egress.Stop(context.WithoutCancel(ctx))
+	defer func() {
+		s.ProxyLog, _ = s.Egress.Stop(context.WithoutCancel(ctx))
+	}()
 	outDir, err := os.MkdirTemp("", "gateflow-doctor-")
 	if err != nil {
 		return nil, err
@@ -104,7 +117,8 @@ func (s *Sandbox) Run(ctx context.Context) ([]CheckResult, error) {
 	defer os.RemoveAll(outDir)
 
 	spec := agentSpec("gateflow-"+s.Project.Name+"-doctor-sandbox", s.AgentImage, s.Egress.Network(), proxyURL,
-		s.Agent, s.Project, s.Workspace.AgentMounts(sandboxTicket), envFile, outDir, nil)
+		s.Agent, s.Project, s.Workspace.AgentMounts(sandboxTicket), envFile, outDir,
+		[]container.Mount{{Type: container.Volume, Source: s.WorkVolume, Target: "/check/vol", ReadOnly: true}})
 	if len(allow) > 0 {
 		spec.Env["ALLOWED_HOST"] = allow[0]
 	}
@@ -120,7 +134,12 @@ func (s *Sandbox) Run(ctx context.Context) ([]CheckResult, error) {
 	for _, c := range SandboxChecks() {
 		code, ran := codes[c.ID]
 		passed := ran && ((c.Expect == "fail" && code != 0) || (c.Expect == "ok" && code == 0))
-		results = append(results, CheckResult{Check: c, ExitCode: code, Passed: passed})
+		r := CheckResult{Check: c, ExitCode: code, Passed: passed}
+		if !passed && c.Group == "owner" {
+			r.Advice = fmt.Sprintf("root の持ち主のディレクトリがある。そのチケットのディレクトリを消して作り直す（docker run --rm --user agent -v %s:/vol %s sh -c 'rm -rf /vol/<チケット>'）か、ボリュームを消す（docker volume rm %s %s）。土台のイメージのマウント先の持ち主も確かめる",
+				s.WorkVolume, s.AgentImage, s.WorkVolume, s.Agent.AuthMount().Source)
+		}
+		results = append(results, r)
 	}
 	after, err := fileHash(envFile)
 	unchanged := err == nil && after == before
