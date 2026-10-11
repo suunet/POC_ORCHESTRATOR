@@ -17,7 +17,7 @@
       "needs_fix": {"actions": ["findings-to-questions"], "to": "draft"}
     }},
     "p3-prepare": {"agent": "dev", "on": {
-      "done": {"actions": ["write-sections", "check-sections", "check-acceptance", "check-ids", "commit", "import"], "to": "ready-to-approve"},
+      "done": {"actions": ["write-sections", "check-sections", "commit", "check-acceptance", "check-ids", "import"], "to": "ready-to-approve"},
       "needs_answer": {"actions": ["questions-from-output"], "to": "draft"}
     }},
     "p5": {"agent": "dev", "on": {
