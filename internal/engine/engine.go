@@ -31,7 +31,7 @@ type Outcome string
 
 const (
 	Gate        Outcome = "gate"          // 人間関門で止まった（人の操作を待つ）
-	Finished    Outcome = "finished"      // 流れの終わり（ready-for-review など）に着いた
+	Finished    Outcome = "finished"      // 流れの終わり（done・cancelled）に着いた
 	Stopped     Outcome = "stopped"       // 人の確認待ちで止まった（blocked、上限、進展なしなど）
 	NothingToDo Outcome = "nothing-to-do" // 進められる状態でない（保留など）
 	Runnable    Outcome = "runnable"      // gateflow が進められる状態（run を待つ。Describe だけが返す）
@@ -285,7 +285,7 @@ func (e *Engine) next(status string) string {
 		if i := e.Project.Issue; i != nil && i.PRRef != "" && e.Ticket.IssueID() != "" {
 			s += fmt.Sprintf("（PR の本文：%s）", i.Format(i.PRRef, e.Ticket.IssueID()))
 		}
-		return s
+		return s + fmt.Sprintf("。main へ git でマージしてから gateflow done %s", id)
 	}
 	for _, h := range e.Workflow.Human {
 		if slices.Contains(h.From, status) && h.Command != "cancel" {

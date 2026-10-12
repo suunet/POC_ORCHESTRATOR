@@ -25,9 +25,15 @@ type Event struct {
 	To      string `json:"to"`
 }
 
+// Checks は、関門の機械検証のうち、指示書の外（プロジェクトの git など）を見るもの。
+type Checks struct {
+	// BranchMerged は、作業ブランチの先頭が main に含まれている（祖先である）かを確かめ、含まれていなければ理由を返す
+	BranchMerged func(branch string) error
+}
+
 // Human は、関門のコマンドを実行する。機械検証（guards）に合格したときだけステータスを書く。
 // hold・unhold は、ステータスを変えずに保留の印を付け外しする。
-func Human(t *ticket.Ticket, wf *workflow.Workflow, command string, now time.Time) error {
+func Human(t *ticket.Ticket, wf *workflow.Workflow, command string, now time.Time, checks Checks) error {
 	status := string(t.Status)
 	switch command {
 	case "hold", "unhold":
@@ -41,7 +47,7 @@ func Human(t *ticket.Ticket, wf *workflow.Workflow, command string, now time.Tim
 		return fmt.Errorf("%s は状態 %s では %s できない", t.ID, status, command)
 	}
 	for _, g := range h.Guards {
-		if err := checkGuard(t, g); err != nil {
+		if err := checkGuard(t, g, checks); err != nil {
 			return fmt.Errorf("%s の %s の機械検証に不合格：%w", t.ID, command, err)
 		}
 	}
@@ -51,7 +57,7 @@ func Human(t *ticket.Ticket, wf *workflow.Workflow, command string, now time.Tim
 	return RecordEvent(t, "human", command, status, h.To, now)
 }
 
-func checkGuard(t *ticket.Ticket, guard string) error {
+func checkGuard(t *ticket.Ticket, guard string, checks Checks) error {
 	switch guard {
 	case "questions-resolved":
 		n, err := t.UnresolvedQuestions()
@@ -64,6 +70,14 @@ func checkGuard(t *ticket.Ticket, guard string) error {
 	case "approval-checked":
 		if !t.ApprovalChecked() {
 			return fmt.Errorf("§4.5 のチェックがすべて入っていない")
+		}
+	case "branch-merged":
+		// NOTE: マージそのものは人が git で行う。gateflow は main に書き込まず、含まれていることだけを確かめる
+		if checks.BranchMerged == nil {
+			return fmt.Errorf("作業ブランチのマージを確かめる手段がない")
+		}
+		if err := checks.BranchMerged(t.Branch); err != nil {
+			return err
 		}
 	default:
 		return fmt.Errorf("機械検証 %s は gateflow にない", guard)

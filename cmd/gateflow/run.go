@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -325,7 +326,7 @@ func summaryLine(id string, res engine.Result) string {
 	return s
 }
 
-// cmdHuman は、関門のコマンド（ready・approve・hold・unhold・cancel）を実行する。docker と AI サービスは使わない。
+// cmdHuman は、関門のコマンド（ready・approve・done・hold・unhold・cancel）を実行する。docker と AI サービスは使わない。
 func cmdHuman(command string, args []string, stdout, stderr io.Writer) int {
 	dir, ids, ok := projectFlags(command, args, stderr)
 	if !ok || len(ids) != 1 {
@@ -342,7 +343,8 @@ func cmdHuman(command string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
-	if err := engine.Human(tk, wf, command, time.Now()); err != nil {
+	checks := engine.Checks{BranchMerged: func(branch string) error { return branchMerged(dir, project.Branch.Main, branch) }}
+	if err := engine.Human(tk, wf, command, time.Now(), checks); err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitFailed
 	}
@@ -384,6 +386,31 @@ func cmdStatus(args []string, stdout, stderr io.Writer) int {
 		printResult(stdout, tk.ID, e.Describe())
 	}
 	return exitOK
+}
+
+// branchMerged は、プロジェクトの git で、作業ブランチの先頭が main に含まれている（祖先である）かを確かめる。
+// 読むだけで、main には書き込まない（マージは人が git で行う）。
+func branchMerged(dir, mainBranch, branch string) error {
+	git := func(args ...string) ([]byte, error) {
+		return exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	}
+	head, err := git("rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
+	if err != nil {
+		return fmt.Errorf("作業ブランチ %s がない", branch)
+	}
+	if _, err := git("rev-parse", "--verify", "--quiet", "refs/heads/"+mainBranch+"^{commit}"); err != nil {
+		return fmt.Errorf("main のブランチ %s がない", mainBranch)
+	}
+	_, err = git("merge-base", "--is-ancestor", "refs/heads/"+branch, "refs/heads/"+mainBranch)
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return nil
+	case errors.As(err, &exit) && exit.ExitCode() == 1:
+		return fmt.Errorf("作業ブランチ %s の先頭 %.7s が %s に含まれていない。git で %s へマージしてから done する", branch, strings.TrimSpace(string(head)), mainBranch, mainBranch)
+	default:
+		return fmt.Errorf("作業ブランチ %s のマージを確かめられない: %w", branch, err)
+	}
 }
 
 // gitAuthor は、ホストの git の設定から、コミットの名義（人）を返す。

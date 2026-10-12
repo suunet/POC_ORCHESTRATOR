@@ -3,6 +3,7 @@ package engine_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -304,18 +305,18 @@ func TestRun_FullFlow(t *testing.T) {
 	}
 
 	// 関門：§4.5 がすべてチェックされていなければ approve できない。
-	if err := engine.Human(tk, f.e.Workflow, "approve", f.e.Now()); err == nil {
+	if err := engine.Human(tk, f.e.Workflow, "approve", f.e.Now(), engine.Checks{}); err == nil {
 		t.Fatal("§4.5 が未チェックなのに approve できた")
 	}
 	os.WriteFile(tk.Path, []byte(strings.ReplaceAll(tk.Body, "- [ ]", "- [x]")), 0o644)
 	f.reload(t)
-	if err := engine.Human(f.e.Ticket, f.e.Workflow, "approve", f.e.Now()); err != nil {
+	if err := engine.Human(f.e.Ticket, f.e.Workflow, "approve", f.e.Now(), engine.Checks{}); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
 	f.reload(t)
 
 	res = mustRun(t, f)
-	if res.Outcome != engine.Finished || f.status(t) != ticket.ReadyForReview {
+	if res.Outcome != engine.Gate || f.status(t) != ticket.ReadyForReview {
 		t.Fatalf("2回目 = %+v, status %s", res, f.status(t))
 	}
 	if len(f.ws.commits) != 2 || !strings.HasPrefix(f.ws.commits[1], "feat(T-002): ") || len(f.ws.imports) != 2 {
@@ -377,7 +378,7 @@ func TestRun_P2NeedsFix(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(f.root, ".docs/_stash/tickets/T-002/reviews/01-p2-review.md")); err != nil {
 		t.Errorf("レビュー報告がない: %v", err)
 	}
-	if err := engine.Human(f.e.Ticket, f.e.Workflow, "ready", f.e.Now()); err == nil {
+	if err := engine.Human(f.e.Ticket, f.e.Workflow, "ready", f.e.Now(), engine.Checks{}); err == nil {
 		t.Error("未確定の質疑があるのに ready できた")
 	}
 }
@@ -545,7 +546,7 @@ func TestRun_VerifyLoop(t *testing.T) {
 	f.runner.codes = []int{0, 1, 0, 0, 0, 0}
 	f.runner.outputs = []string{"ok", "--- FAIL: TestLog (0.1s)", "ok", "ok", "ok", "ok"}
 	res := mustRun(t, f)
-	if res.Outcome != engine.Finished || f.runner.calls["p5"] != 2 {
+	if res.Outcome != engine.Gate || f.runner.calls["p5"] != 2 {
 		t.Fatalf("res = %+v, P5 の呼び出し = %d", res, f.runner.calls["p5"])
 	}
 	if fb := f.runner.inputs["p5"][1]["/in/feedback.md"]; !strings.Contains(fb, "TestLog") {
@@ -643,7 +644,7 @@ func TestRun_BlockedAndResume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
-	if res.Outcome != engine.Finished || f.status(t) != ticket.ReadyForReview {
+	if res.Outcome != engine.Gate || f.status(t) != ticket.ReadyForReview {
 		t.Fatalf("resume = %+v, status %s", res, f.status(t))
 	}
 }
@@ -687,26 +688,26 @@ func TestRun_ManualEditWarning(t *testing.T) {
 func TestHuman(t *testing.T) {
 	body := strings.Replace(flowTicket, "ステータス: ready-to-prepare", "ステータス: draft", 1)
 	f := newFlow(t, body, nil)
-	if err := engine.Human(f.e.Ticket, f.e.Workflow, "approve", f.e.Now()); err == nil {
+	if err := engine.Human(f.e.Ticket, f.e.Workflow, "approve", f.e.Now(), engine.Checks{}); err == nil {
 		t.Error("draft で approve できた")
 	}
-	if err := engine.Human(f.e.Ticket, f.e.Workflow, "ready", f.e.Now()); err != nil {
+	if err := engine.Human(f.e.Ticket, f.e.Workflow, "ready", f.e.Now(), engine.Checks{}); err != nil {
 		t.Fatalf("ready: %v", err)
 	}
 	if f.status(t) != ticket.ReadyToPrepare {
 		t.Errorf("status = %s", f.status(t))
 	}
-	if err := engine.Human(f.e.Ticket, f.e.Workflow, "hold", f.e.Now()); err != nil || !f.e.Ticket.Held() {
+	if err := engine.Human(f.e.Ticket, f.e.Workflow, "hold", f.e.Now(), engine.Checks{}); err != nil || !f.e.Ticket.Held() {
 		t.Errorf("hold: %v, held %v", err, f.e.Ticket.Held())
 	}
 	res := mustRun(t, f)
 	if res.Outcome != engine.NothingToDo || !strings.Contains(res.Message, "保留") {
 		t.Errorf("保留のチケットを進めた: %+v", res)
 	}
-	if err := engine.Human(f.e.Ticket, f.e.Workflow, "unhold", f.e.Now()); err != nil || f.e.Ticket.Held() {
+	if err := engine.Human(f.e.Ticket, f.e.Workflow, "unhold", f.e.Now(), engine.Checks{}); err != nil || f.e.Ticket.Held() {
 		t.Errorf("unhold: %v", err)
 	}
-	if err := engine.Human(f.e.Ticket, f.e.Workflow, "cancel", f.e.Now()); err != nil || f.status(t) != ticket.Cancelled {
+	if err := engine.Human(f.e.Ticket, f.e.Workflow, "cancel", f.e.Now(), engine.Checks{}); err != nil || f.status(t) != ticket.Cancelled {
 		t.Errorf("cancel: %v, status %s", err, f.status(t))
 	}
 	data, _ := os.ReadFile(filepath.Join(f.root, ".docs/_stash/tickets/T-002", engine.EventsFile))
@@ -745,3 +746,39 @@ func (e *fakeEgress) Stop(context.Context) ([]byte, error) {
 	return []byte("{\"decision\":\"deny\"}\n"), nil
 }
 func (e *fakeEgress) Network() string { return "gateflow-sample-internal" }
+
+// done：作業ブランチが main に含まれているときだけ、ready-for-review から done にする（M2.5）。
+func TestHuman_Done(t *testing.T) {
+	merged := engine.Checks{BranchMerged: func(branch string) error {
+		if branch != "feature/t-002-log" {
+			t.Errorf("確かめたブランチ = %s", branch)
+		}
+		return nil
+	}}
+	notMerged := engine.Checks{BranchMerged: func(string) error { return errors.New("main に含まれていない") }}
+
+	review := strings.Replace(flowTicket, "ステータス: ready-to-prepare", "ステータス: ready-for-review", 1)
+	f := newFlow(t, review, nil)
+	if err := engine.Human(f.e.Ticket, f.e.Workflow, "done", f.e.Now(), notMerged); err == nil || !strings.Contains(err.Error(), "main に含まれていない") {
+		t.Errorf("未マージで done できた: %v", err)
+	}
+	if f.status(t) != ticket.ReadyForReview {
+		t.Errorf("不合格なのにステータスが変わった: %s", f.status(t))
+	}
+	if err := engine.Human(f.e.Ticket, f.e.Workflow, "done", f.e.Now(), merged); err != nil || f.status(t) != ticket.Done {
+		t.Fatalf("done: %v, status %s", err, f.status(t))
+	}
+	if ev, ok := engine.LastEvent(f.e.Ticket); !ok || ev.Command != "done" || ev.By != "human" || ev.From != "ready-for-review" || ev.To != "done" {
+		t.Errorf("記録 = %+v", ev)
+	}
+	if res := f.e.Describe(); res.Outcome != engine.Finished || res.Next != "" {
+		t.Errorf("done の後 = %+v", res)
+	}
+
+	for _, status := range []string{"draft", "ready-to-approve", "implementing"} {
+		f := newFlow(t, strings.Replace(flowTicket, "ステータス: ready-to-prepare", "ステータス: "+status, 1), nil)
+		if err := engine.Human(f.e.Ticket, f.e.Workflow, "done", f.e.Now(), merged); err == nil {
+			t.Errorf("%s から done できた", status)
+		}
+	}
+}

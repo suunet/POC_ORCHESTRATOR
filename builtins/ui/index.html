@@ -42,7 +42,9 @@ tr:last-child td { border-bottom: none; }
 code, .mono { font-family: var(--mono); font-size: 0.8125rem; }
 .chip { display: inline-block; padding: 0 8px; border-radius: 999px; font-size: 0.75rem; line-height: 1.66; background: var(--level2); color: var(--text); white-space: nowrap; }
 .chip.gate { background: var(--primary-bg); color: var(--primary); }
-.chip.stopped, .chip.interrupted { background: var(--error-bg); color: var(--error); }
+.chip.stopped, .chip.interrupted, .chip.stuck, .chip.unknown-state { background: var(--error-bg); color: var(--error); }
+.chip.review { background: var(--primary-bg); color: var(--primary); }
+.nowrap { white-space: nowrap; }
 .chip.runnable { background: var(--warning-bg); color: var(--warning); }
 .run-head { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; margin-bottom: 8px; }
 .run-head .id { font-weight: 500; font-size: 1rem; }
@@ -92,7 +94,7 @@ function el(tag, attrs, ...children) {
   }
   return e;
 }
-const outcomeLabel = { gate: "関門", stopped: "止まった", interrupted: "中断", runnable: "run を待つ", "nothing-to-do": "保留など", finished: "終わり" };
+const outcomeLabel = { gate: "関門", review: "レビュー待ち", stopped: "止まった", interrupted: "中断", runnable: "run を待つ", "nothing-to-do": "保留など", stuck: "進めない", "unknown-state": "遷移表にない状態", finished: "終わり" };
 function hms(t) { return t ? t.slice(11, 19) : ""; }
 function minutes(sec) { return Math.floor(sec / 60) + "分" + String(sec % 60).padStart(2, "0") + "秒"; }
 
@@ -105,9 +107,9 @@ function renderWaiting(list) {
     const reason = el("td", {}, w.reason);
     for (const warn of w.warnings || []) reason.append(el("div", { class: "err" }, warn));
     tbody.append(el("tr", {},
-      el("td", { class: "mono" }, w.ticket),
+      el("td", { class: "mono nowrap" }, w.ticket),
       el("td", {}, w.title),
-      el("td", {}, el("span", { class: "chip " + w.outcome }, outcomeLabel[w.outcome] || w.outcome), " ", el("span", { class: "mono" }, w.status)),
+      el("td", { class: "nowrap" }, el("span", { class: "chip " + w.outcome }, outcomeLabel[w.outcome] || w.outcome), " ", el("span", { class: "mono" }, w.status)),
       reason,
       el("td", {}, el("code", {}, w.next || ""))));
   }

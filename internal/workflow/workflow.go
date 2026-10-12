@@ -71,7 +71,7 @@ var checkOutcomes = map[string][]string{
 }
 
 // KnownGuards は、人の遷移の前に確かめる機械検証の名前（中身は gateflow のコード）。
-var KnownGuards = []string{"questions-resolved", "approval-checked"}
+var KnownGuards = []string{"questions-resolved", "approval-checked", "branch-merged"}
 
 // KnownActions は、outcome の行き先で行う操作の名前（中身は gateflow のコード）。
 var KnownActions = []string{

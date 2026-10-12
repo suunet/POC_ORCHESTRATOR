@@ -50,7 +50,7 @@ type Status struct {
 	Errors  []string  `json:"errors,omitempty"` // 読めなかったチケット
 }
 
-// Waiting は、人を待っているチケット。Outcome は gate・stopped・runnable・nothing-to-do・finished・interrupted。
+// Waiting は、人を待っているチケット。Outcome は gate・review・stopped・runnable・nothing-to-do・stuck・unknown-state・interrupted。
 type Waiting struct {
 	Ticket   string   `json:"ticket"`
 	Title    string   `json:"title"`
@@ -163,15 +163,39 @@ func (m *Monitor) readTicket(fsys fs.FS, id string, st *Status) error {
 		w.Reason = fmt.Sprintf("中断（実行中の印が残っているが、プロセス %d がない）", mark.PID)
 	case res.Outcome == engine.Finished && res.Next == "":
 		return nil // 終わったチケット（cancelled など）は出さない
+	case !slices.Contains(m.Workflow.States, string(t.Status)):
+		w.Outcome = "unknown-state"
+		w.Reason = fmt.Sprintf("遷移表にない状態（%s）", t.Status)
+		w.Next = m.cancelNext(t)
 	case res.Outcome == engine.Stopped:
 		w.Reason = res.Reason + "：" + res.Message
+	case res.Outcome == engine.Gate && m.allows("done", string(t.Status)):
+		w.Outcome = "review"
+		w.Reason = "コードレビューを待っている"
 	case res.Outcome == engine.Gate:
 		w.Reason = gateReason(fsys, id, run)
+	case res.Outcome == engine.NothingToDo && !t.Held():
+		w.Outcome = "stuck"
+		w.Reason = fmt.Sprintf("gateflow が進めない状態（%s。実行の記録も止まった記録もない）", t.Status)
+		w.Next = m.cancelNext(t)
 	default:
 		w.Reason = res.Message
 	}
 	st.Waiting = append(st.Waiting, w)
 	return nil
+}
+
+func (m *Monitor) allows(command, status string) bool {
+	_, ok := m.Workflow.HumanCommand(command, status)
+	return ok
+}
+
+// cancelNext は、止まったまま進めないチケットの次の操作（cancel できるなら cancel）を返す。
+func (m *Monitor) cancelNext(t *ticket.Ticket) string {
+	if m.allows("cancel", string(t.Status)) {
+		return "不要なら gateflow cancel " + t.ID
+	}
+	return "遷移表の cancel の遷移元にない状態なので、cancel もできない。指示書のステータスを確かめる"
 }
 
 // latestRun は、名前の順で最後の、state.json のある実行の記録を返す。

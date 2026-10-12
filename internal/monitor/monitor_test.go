@@ -106,6 +106,10 @@ func fixture(t *testing.T) (dir string) {
 	// T-014：中止（出さない）、T-015：ready-for-review（コードレビューを待つ）
 	write("T-014/ticket.md", ticketMD("T-014", "cancelled"))
 	write("T-015/ticket.md", ticketMD("T-015", "ready-for-review"))
+	// T-018：done（出さない）、T-019：遷移表にない状態、T-020：遷移表にあるが進めない（M1 の検証の残りの型）
+	write("T-018/ticket.md", ticketMD("T-018", "done"))
+	write("T-019/ticket.md", ticketMD("T-019", "in-uat"))
+	write("T-020/ticket.md", ticketMD("T-020", "implementing"))
 
 	// T-016：tickets の外を指すディレクトリのリンク。T-017：外の state.json を指すファイルのリンク
 	if err := os.Symlink(outside, filepath.Join(dir, "T-016")); err != nil {
@@ -168,8 +172,19 @@ func TestStatus_Fixture(t *testing.T) {
 		!strings.Contains(w.Next, "resume T-013") {
 		t.Errorf("T-013 = %+v", w)
 	}
-	if w := findWaiting(st, "T-015"); w == nil || w.Outcome != "finished" || !strings.Contains(w.Next, "コードレビュー") {
+	if w := findWaiting(st, "T-015"); w == nil || w.Outcome != "review" || w.Reason != "コードレビューを待っている" ||
+		!strings.Contains(w.Next, "gateflow done T-015") {
 		t.Errorf("T-015 = %+v", w)
+	}
+	if w := findWaiting(st, "T-018"); w != nil {
+		t.Errorf("done のチケットが出ている: %+v", w)
+	}
+	if w := findWaiting(st, "T-019"); w == nil || w.Outcome != "unknown-state" || !strings.Contains(w.Reason, "遷移表にない状態（in-uat）") ||
+		!strings.Contains(w.Next, "cancel もできない") {
+		t.Errorf("T-019 = %+v", w)
+	}
+	if w := findWaiting(st, "T-020"); w == nil || w.Outcome != "stuck" || w.Next != "不要なら gateflow cancel T-020" {
+		t.Errorf("T-020 = %+v", w)
 	}
 	if w := findWaiting(st, "T-014"); w != nil {
 		t.Errorf("中止したチケットが出ている: %+v", w)

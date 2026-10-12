@@ -36,6 +36,7 @@ const usage = `使い方:
   gateflow monitor [--project <dir>] [--port <N>]  実行の様子を見る読み取り専用の画面（127.0.0.1 だけ。既定のポート 7420）
   gateflow ready <T-NNN> [--project <dir>]  質疑がすべて確定したら P2 へ進める
   gateflow approve <T-NNN> [--project <dir>]  §4.5 がすべてチェックされたら実装へ進める
+  gateflow done <T-NNN> [--project <dir>]   作業ブランチが main に含まれていれば完了にする（マージは git で行う）
   gateflow hold|unhold <T-NNN> [--project <dir>]  保留の印を付ける・外す
   gateflow cancel <T-NNN> [--project <dir>] チケットを中止する
   gateflow doctor sandbox [--project <dir>] エージェントが外へ出られないことを確かめる
@@ -76,7 +77,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		default:
 			return cmdDoctor(ctx, args[1:], stdout, stderr)
 		}
-	case "ready", "approve", "hold", "unhold", "cancel":
+	case "ready", "approve", "done", "hold", "unhold", "cancel":
 		return cmdHuman(args[0], args[1:], stdout, stderr)
 	case "status":
 		return cmdStatus(args[1:], stdout, stderr)

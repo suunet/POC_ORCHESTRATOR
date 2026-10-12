@@ -1,10 +1,11 @@
 {
   "name": "aidd-impl",
-  "states": ["draft", "ready-to-prepare", "ready-to-approve", "ready-to-implement", "implementing", "ready-for-review", "cancelled"],
-  "terminal": ["ready-for-review", "cancelled"],
+  "states": ["draft", "ready-to-prepare", "ready-to-approve", "ready-to-implement", "implementing", "ready-for-review", "done", "cancelled"],
+  "terminal": ["done", "cancelled"],
   "human": [
     {"command": "ready", "from": ["draft"], "to": "ready-to-prepare", "guards": ["questions-resolved"]},
     {"command": "approve", "from": ["ready-to-approve"], "to": "ready-to-implement", "guards": ["approval-checked"]},
+    {"command": "done", "from": ["ready-for-review"], "to": "done", "guards": ["branch-merged"]},
     {"command": "cancel", "from": ["draft", "ready-to-prepare", "ready-to-approve", "ready-to-implement", "implementing"], "to": "cancelled"}
   ],
   "auto": [
