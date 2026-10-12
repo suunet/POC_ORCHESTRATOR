@@ -23,8 +23,9 @@ func (Agent) Command(req agent.Request) ([]string, string) {
 }
 
 // Hosts は、LLM の API と認証の更新に必要なホスト。
+// NOTE: アクセストークンの更新は platform.claude.com へ行く。許可しないと、トークンが切れた後の実行がすべて 401 で失敗する
 func (Agent) Hosts() []string {
-	return []string{"api.anthropic.com:443", "console.anthropic.com:443"}
+	return []string{"api.anthropic.com:443", "console.anthropic.com:443", "platform.claude.com:443"}
 }
 
 const authDir = "/auth"

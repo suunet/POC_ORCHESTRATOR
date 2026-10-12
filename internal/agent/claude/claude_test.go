@@ -34,7 +34,7 @@ func TestHosts(t *testing.T) {
 		t.Fatal("許可リストのホストがない")
 	}
 	for _, h := range hosts {
-		if !strings.HasSuffix(h, ":443") || !strings.Contains(h, "anthropic.com") {
+		if !strings.HasSuffix(h, ":443") || !(strings.Contains(h, "anthropic.com") || strings.Contains(h, "claude.com")) {
 			t.Errorf("ホスト %q は LLM の API か認証の HTTPS でない", h)
 		}
 	}
