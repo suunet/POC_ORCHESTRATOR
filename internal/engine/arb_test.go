@@ -175,3 +175,35 @@ func TestRun_MergeMainOnlyInP2Stage(t *testing.T) {
 		t.Errorf("P5 の段階 = %+v", g.ws.prepareOpts)
 	}
 }
+
+// 試験：過去の P2 の差し戻しの記録（その時点の写し）を入力に、本番と同じ検査で ARB を1回動かす。コミットも質疑の書き込みもしない。
+func TestARBTrial(t *testing.T) {
+	f := newFlow(t, flowTicket, map[string][]string{"p2-arbitrate": {arbResolved}})
+	src := filepath.Join(t.TempDir(), "runs/20261011-210543/steps/01-p2-review")
+	writeTree(t, src, map[string]string{
+		"out/result.json":                p2Fix,
+		"in/ticket.md":                   flowTicket,
+		"seen/.docs/design/buc.md":       "| BUC | UC |\n|---|---|\n| BUC-S01 | UC-001（システムの死活を確認する） |\n",
+		"seen/.docs/design/uc/UC-001.md": "# UC-001\n",
+	})
+	dest := filepath.Join(t.TempDir(), "trial")
+	res, err := f.e.ARBTrial(t.Context(), src, dest)
+	if err != nil || !res.OK || res.Attempts != 1 || res.Result == nil || res.Result.Outcome != "resolved" {
+		t.Fatalf("res = %+v, err = %v", res, err)
+	}
+	in := f.runner.inputs["p2-arbitrate"][0]
+	if !strings.Contains(in["/in/review.json"], "UC-001 の要求とログの項目") || in["/in/ticket.md"] == "" {
+		t.Errorf("入力 = %v", in)
+	}
+	for _, p := range []string{"trial.json", "prompt.md", "work-1/.docs/design/buc.md"} {
+		if _, err := os.Stat(filepath.Join(dest, p)); err != nil {
+			t.Errorf("%s がない", p)
+		}
+	}
+	if len(f.ws.commits) != 0 {
+		t.Errorf("試験でコミットした: %v", f.ws.commits)
+	}
+	if _, err := os.Stat(filepath.Join(f.root, ".docs/_stash/tickets/T-002", "questions.md")); err == nil {
+		t.Error("試験で質疑を書いた")
+	}
+}

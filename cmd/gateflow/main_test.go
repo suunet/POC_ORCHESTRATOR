@@ -162,7 +162,7 @@ func TestRun_UsageListsM2Commands(t *testing.T) {
 		}
 	}
 	// ダミーの AI の指定は使い方に載せない（Q-13）
-	for _, w := range []string{"mock", "GATEFLOW_AGENT", "SCENARIO"} {
+	for _, w := range []string{"mock", "GATEFLOW_AGENT", "SCENARIO", "arb-trial"} {
 		if strings.Contains(errOut, w) {
 			t.Errorf("使い方に %q が出ている", w)
 		}

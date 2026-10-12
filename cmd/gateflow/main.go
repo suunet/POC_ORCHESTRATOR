@@ -63,7 +63,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "version":
 		fmt.Fprintf(stdout, "gateflow %s\n", version)
 		return exitOK
-	case "run", "resume", "login", "doctor", "monitor":
+	case "run", "resume", "login", "doctor", "monitor", "arb-trial":
 		ctx, cancel := signalContext()
 		defer cancel()
 		switch args[0] {
@@ -75,6 +75,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return cmdLogin(ctx, args[1:], stdout, stderr)
 		case "monitor":
 			return cmdMonitor(ctx, args[1:], stdout, stderr)
+		case "arb-trial":
+			return cmdARBTrial(ctx, args[1:], stdout, stderr)
 		default:
 			return cmdDoctor(ctx, args[1:], stdout, stderr)
 		}

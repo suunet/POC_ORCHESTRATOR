@@ -396,3 +396,17 @@ func catalogDiff(diff string) string {
 	}
 	return b.String()
 }
+
+// arbKnowledge は、ARB に渡す知識（本番と試験で同じ）。
+func (e *Engine) arbKnowledge() []string {
+	k := []string{
+		"BJ の P2 のレビューの出力（findings と questions）は`/in/review.json`。番号は 0 から数える",
+		"`/in/forced.json`の findings の番号は、前の回に ARB が裁定したのに BJ の指摘が残ったもの。必ず人へ回す（decider を human にする）",
+		"カタログ（`/work/.docs/design/`）は作業ツリーで直してよい。それ以外のファイルは変えない。コミットは gateflow が行う",
+		"外のサイトは読めない。規格を根拠にするときは、記憶によることを前提に kind を standard にする",
+	}
+	if len(e.Project.Contracts) > 0 {
+		k = append(k, "契約の ID の一覧（これに触れる裁定は人へ回す。末尾の * は前方一致）："+strings.Join(e.Project.Contracts, "、"))
+	}
+	return k
+}

@@ -451,14 +451,7 @@ func (e *Engine) inputs(ctx context.Context, st *State, step, dir string) ([]con
 			return nil, nil, err
 		}
 		mounts = append(mounts, bind(st.Review, "/in/review.json"), bind(forcedPath, "/in/forced.json"))
-		knowledge = append(knowledge,
-			"BJ の P2 のレビューの出力（findings と questions）は`/in/review.json`。番号は 0 から数える",
-			"`/in/forced.json`の findings の番号は、前の回に ARB が裁定したのに BJ の指摘が残ったもの。必ず人へ回す（decider を human にする）",
-			"カタログ（`/work/.docs/design/`）は作業ツリーで直してよい。それ以外のファイルは変えない。コミットは gateflow が行う",
-			"外のサイトは読めない。規格を根拠にするときは、記憶によることを前提に kind を standard にする")
-		if len(e.Project.Contracts) > 0 {
-			knowledge = append(knowledge, "契約の ID の一覧（これに触れる裁定は人へ回す。末尾の * は前方一致）："+strings.Join(e.Project.Contracts, "、"))
-		}
+		knowledge = append(knowledge, e.arbKnowledge()...)
 	case "p3-prepare":
 		tmpl, err := fs.ReadFile(e.Builtins, "templates/catalog/uc.md")
 		if err != nil {
