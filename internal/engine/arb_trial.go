@@ -20,11 +20,16 @@ import (
 
 // TrialResult は、ARB の試験の1回の結果（M2.6）。
 type TrialResult struct {
-	Result   *output.ARBResult `json:"result,omitempty"`
-	Changes  []ARBChange       `json:"changes,omitempty"`
-	Invalid  []string          `json:"invalid,omitempty"` // 出力の不正（試みごと）
-	Attempts int               `json:"attempts"`
-	OK       bool              `json:"ok"`
+	Raw    *output.ARBResult `json:"raw,omitempty"` // ARB の出力そのもの（契約の守りの前）
+	Result *output.ARBResult `json:"result,omitempty"`
+	// Guarded は、契約の守りで人へ回した裁定の番号（試験の指標 D のうち、守りによるものを分けて数える）
+	Guarded      []int            `json:"guarded,omitempty"`
+	ContractHits map[int][]string `json:"contractHits,omitempty"`
+	CatalogReset bool             `json:"catalogReset,omitempty"`
+	Changes      []ARBChange      `json:"changes,omitempty"`
+	Invalid      []string         `json:"invalid,omitempty"` // 出力の不正（試みごと）
+	Attempts     int              `json:"attempts"`
+	OK           bool             `json:"ok"`
 }
 
 // ARBTrial は、過去の P2 の差し戻しの記録（src：runs/<日時>/steps/NN-p2-review。その時点の写しがそろっている）を入力に、
@@ -142,13 +147,18 @@ func (e *Engine) ARBTrial(ctx context.Context, src, dest string) (TrialResult, e
 			res.Invalid = append(res.Invalid, err.Error())
 			continue
 		}
-		res.Result = r
-		changes, err := ValidateARB(ARBCheck{Result: r, Review: review, Seen: filepath.Join(src, "seen"), In: in, After: work, Project: e.Project, Rules: e.Rules})
-		res.Changes = changes
+		raw, _ := output.ParseARB(out, review, nil)
+		res.Raw = raw
+		v, err := ValidateARB(ARBCheck{Result: r, Review: review, Seen: filepath.Join(src, "seen"), In: in, After: work, Project: e.Project, Rules: e.Rules})
+		res.Changes = v.Changes
 		if err != nil {
+			res.Result = r
 			res.Invalid = append(res.Invalid, err.Error())
 			continue
 		}
+		res.Guarded, res.CatalogReset = applyContractGuard(r, v.ContractHits)
+		res.ContractHits = v.ContractHits
+		res.Result = r
 		res.OK = true
 		break
 	}

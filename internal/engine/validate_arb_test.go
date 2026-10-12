@@ -46,11 +46,13 @@ func TestValidateARB(t *testing.T) {
 		t.Fatal(err)
 	}
 	review := &output.ReviewResult{Findings: []output.Finding{{Label: "MUST", Finding: "x", Evidence: &output.Evidence{ID: "UC-001"}}}}
+	var hits map[int][]string
 	check := func(basis output.Basis, edits []string, contracts []string) error {
 		r := &output.ARBResult{Outcome: "resolved", Summary: "s", Decisions: []output.Decision{
-			{Findings: []int{0}, Decider: "arb", Answer: "a", Basis: &basis, Edits: edits}}}
-		_, err := engine.ValidateARB(engine.ARBCheck{Result: r, Review: review, Seen: seen, In: in, After: after,
+			{Findings: []int{0}, Decider: "arb", Answer: "NFR-06 には触れない", Basis: &basis, Edits: edits}}}
+		v, err := engine.ValidateARB(engine.ARBCheck{Result: r, Review: review, Seen: seen, In: in, After: after,
 			Project: &config.Project{Contracts: contracts}, Rules: rules})
+		hits = v.ContractHits
 		return err
 	}
 	for name, tc := range map[string]struct {
@@ -68,7 +70,6 @@ func TestValidateARB(t *testing.T) {
 		"規約の行が多すぎる":     {output.Basis{Kind: "policy", Ref: ".docs/operations/policies/coding.md:9"}, nil, "行数"},
 		"ない規約":          {output.Basis{Kind: "policy", Ref: ".docs/operations/policies/none.md"}, nil, "ない"},
 		"規格（記憶による）":     {output.Basis{Kind: "standard", Ref: "W3C Trace Context"}, nil, ""},
-		"契約の ID（前方一致）":  {output.Basis{Kind: "catalog", Ref: "UC-001"}, []string{"UC-*"}, "契約の ID UC-001"},
 	} {
 		err := check(tc.basis, nil, tc.contracts)
 		if (tc.want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), tc.want)) {
@@ -76,10 +77,19 @@ func TestValidateARB(t *testing.T) {
 		}
 	}
 
+	// 契約の守り：(b) 根拠に契約の ID（前方一致）。答えの文に出てくるだけ（NFR-06）は数えない
+	if err := check(output.Basis{Kind: "catalog", Ref: "UC-001"}, nil, []string{"UC-*", "NFR-06"}); err != nil || len(hits[0]) != 1 || hits[0][0] != "UC-001" {
+		t.Errorf("根拠の契約: hits = %v, err = %v", hits, err)
+	}
+
 	// 作業ツリーの変更：カタログの外、edits にない ID、契約の ID の行
 	writeTree(t, after, map[string]string{".docs/design/buc.md": cat[".docs/design/buc.md"] + "| BUC-S02 | UC-002 |\n"})
-	if err := check(output.Basis{Kind: "catalog", Ref: "UC-001"}, []string{"UC-002"}, nil); err != nil {
-		t.Errorf("edits に挙げた変更: %v", err)
+	if err := check(output.Basis{Kind: "catalog", Ref: "UC-001"}, []string{"UC-002"}, nil); err != nil || len(hits) != 0 {
+		t.Errorf("edits に挙げた変更: hits = %v, err = %v", hits, err)
+	}
+	// (a) 変えた行に契約の ID：edits でその裁定を特定する
+	if err := check(output.Basis{Kind: "standard", Ref: "RFC"}, []string{"UC-002"}, []string{"UC-002"}); err != nil || len(hits[0]) != 1 || hits[0][0] != "UC-002" {
+		t.Errorf("変えた行の契約: hits = %v, err = %v", hits, err)
 	}
 	if err := check(output.Basis{Kind: "catalog", Ref: "UC-001"}, nil, nil); err == nil || !strings.Contains(err.Error(), "UC-002 が、どの裁定の edits にもない") {
 		t.Errorf("edits にない ID: %v", err)

@@ -136,14 +136,27 @@ func TestARB_LimitEscalatesToHuman(t *testing.T) {
 	}
 }
 
-// 契約の ID に触れる裁定は、ARB の判断によらず出力の不正にする（Q-05。機械による二重の止め）。
-func TestARB_ContractIsRejected(t *testing.T) {
-	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Fix}, "p2-arbitrate": {arbResolved, arbEscalated}})
+// 契約の ID に触れる裁定は、ARB の判断によらず gateflow が人へ回す（Q-05。機械による二重の止め）。
+// 人へ回した裁定がカタログを直していたら、ARB のカタログの変更を戻し、§2 の書き換えも反映しない。
+func TestARB_ContractGuardEscalates(t *testing.T) {
+	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Fix}, "p2-arbitrate": {arbResolved}})
+	f.ws.workChanges = map[string]string{".docs/design/uc/UC-001.md": "# UC-001\n\n| ID |\n|---|\n| UC-001-AC-01 |\n| UC-001-AC-02 |\n\nUC-001 のログの項目\n"}
 	f.e.Project.Contracts = []string{"UC-*"}
 	res := mustRun(t, f)
+	if res.Outcome != engine.Gate || f.status(t) != ticket.Draft || f.runner.calls["p2-arbitrate"] != 1 {
+		t.Fatalf("res = %+v, ARB の呼び出し %d", res, f.runner.calls["p2-arbitrate"])
+	}
+	q := questionsText(t, f.root)
+	states := ticket.QuestionStates([]byte(q))
+	if states["Q-01"].Decider != "ARB" || states["Q-02"].Decider != "人" || states["Q-02"].State != "未回答" {
+		t.Errorf("状態 = %+v\n%s", states, q)
+	}
+	if !strings.Contains(q, "契約の ID（UC-001）に触れるので、gateflow が人へ回した") || !strings.Contains(q, "人へ回す（基準：外から見える契約）") {
+		t.Errorf("質疑:\n%s", q)
+	}
 	log, _ := os.ReadFile(filepath.Join(res.RunDir, "log.jsonl"))
-	if !strings.Contains(string(log), "契約の ID UC-001 に触れる裁定は、人へ回す") {
-		t.Errorf("契約に触れる裁定を受け付けた:\n%s", log)
+	if !strings.Contains(string(log), `"event":"arb-contract"`) || !strings.Contains(string(log), `"catalogReset":true`) || f.ws.resets < 2 {
+		t.Errorf("守りの記録・カタログの戻し（resets %d）:\n%s", f.ws.resets, log)
 	}
 }
 

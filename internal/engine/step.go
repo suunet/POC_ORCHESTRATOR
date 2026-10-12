@@ -240,7 +240,10 @@ func (e *Engine) readOutput(ctx context.Context, step string, def stepDef, dir, 
 		return "", err
 	}
 	if step == "p2-arbitrate" {
-		return outcome, e.checkARBStep(ctx, dir, seen)
+		if err := e.checkARBStep(ctx, dir, seen); err != nil {
+			return "", err
+		}
+		return e.lastARB.Outcome, nil // 契約の守りで人へ回したら escalated に変わる
 	}
 	if seen != "" {
 		if err := e.checkEvidence(seen, filepath.Join(dir, "in")); err != nil {

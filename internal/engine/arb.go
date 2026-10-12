@@ -43,16 +43,31 @@ type ARBChange struct {
 	Removed []string `json:"removed,omitempty"`
 }
 
-// ValidateARB は、ARB の裁定の根拠の実在、契約（Q-05）、作業ツリーの変更を確かめ、変更の一覧を返す。
-// 不合格は出力の不正として扱う（1回だけやり直させる）。
-func ValidateARB(c ARBCheck) ([]ARBChange, error) {
+// ARBValidation は、ARB の出力の検査の結果。ContractHits は、契約の ID に触れた裁定（番号 → 触れた ID）。
+// 契約に触れた裁定は出力の不正にせず、gateflow が人へ回す（M2.6 の Q-05）。
+type ARBValidation struct {
+	Changes      []ARBChange
+	ContractHits map[int][]string
+}
+
+// ValidateARB は、ARB の裁定の根拠の実在、作業ツリーの変更を確かめ、契約の ID に触れた裁定を見つける。
+// 契約に触れたと見なすのは、(b) 裁定の根拠に契約の ID が挙がったとき、(a) その裁定で変えたカタログの行に
+// 契約の ID があるとき（変えた行の ID は、裁定の edits で、どの裁定の変更かを特定する）。
+// error は契約のほかの不合格で、出力の不正として扱う（1回だけやり直させる）。
+func ValidateARB(c ARBCheck) (ARBValidation, error) {
+	v := ARBValidation{ContractHits: map[int][]string{}}
+	hit := func(i int, id string) {
+		if !slices.Contains(v.ContractHits[i], id) {
+			v.ContractHits[i] = append(v.ContractHits[i], id)
+		}
+	}
 	var errs []error
 	add := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
 	var defined *idcheck.Result
 	if c.Rules != nil {
 		r, err := idcheck.Run(c.Seen, c.Rules)
 		if err != nil {
-			return nil, err
+			return v, err
 		}
 		defined = &r
 	}
@@ -67,14 +82,14 @@ func ValidateARB(c ARBCheck) ([]ARBChange, error) {
 		return c.Rules.FindIDs(s)
 	}
 
-	edits := map[string]bool{}
+	editors := map[string][]int{} // ID → その ID を edits に挙げた裁定
 	for i, d := range c.Result.Decisions {
 		if d.Decider != "arb" {
 			continue
 		}
 		where := fmt.Sprintf("decisions[%d]", i)
 		for _, id := range d.Edits {
-			edits[id] = true
+			editors[id] = append(editors[id], i)
 		}
 		b := d.Basis
 		switch b.Kind {
@@ -98,31 +113,72 @@ func ValidateARB(c ARBCheck) ([]ARBChange, error) {
 				add("%s：%v", where, err)
 			}
 		}
-		for _, id := range findIDs(b.Ref + "\n" + d.Answer + "\n" + strings.Join(d.Edits, "\n")) {
+		for _, id := range findIDs(b.Ref) { // (b) 根拠に契約の ID
 			if c.Project.IsContract(id) {
-				add("%s：契約の ID %s に触れる裁定は、人へ回す（基準1。project.json の contracts）", where, id)
+				hit(i, id)
 			}
 		}
 	}
 
 	changes, err := treeChanges(c.Seen, c.After)
 	if err != nil {
-		return nil, err
+		return v, err
 	}
+	v.Changes = changes
 	for _, ch := range changes {
 		if !strings.HasPrefix(ch.Path, catalogDir) {
 			add("作業ツリーの %s を変えている（ARB が直してよいのは %s の下だけ）", ch.Path, catalogDir)
 			continue
 		}
 		for _, id := range findIDs(strings.Join(append(append([]string{}, ch.Added...), ch.Removed...), "\n")) {
-			if c.Project.IsContract(id) {
-				add("%s の変えた行に契約の ID %s がある（基準1。人へ回す）", ch.Path, id)
-			} else if !edits[id] {
+			who, ok := editors[id]
+			if !ok {
 				add("%s の変えた行の ID %s が、どの裁定の edits にもない", ch.Path, id)
+				continue
+			}
+			if c.Project.IsContract(id) { // (a) 変えた行に契約の ID
+				for _, i := range who {
+					hit(i, id)
+				}
 			}
 		}
 	}
-	return changes, errors.Join(errs...)
+	return v, errors.Join(errs...)
+}
+
+// applyContractGuard は、契約の ID に触れた裁定を人へ回す（M2.6 の Q-05）。人へ回した裁定がカタログを直していたら、
+// どの変更がどの裁定のものかを行ごとには分けられないので、ARB のカタログの変更をすべて戻す必要がある（reset が true）。
+// そのとき、ほかにカタログを直していた裁定も人へ回す。§2 の書き換えは反映しない。人へ回した裁定の番号を返す。
+func applyContractGuard(r *output.ARBResult, hits map[int][]string) (converted []int, reset bool) {
+	if len(hits) == 0 {
+		return nil, false
+	}
+	for i := range hits {
+		if len(r.Decisions[i].Edits) > 0 {
+			reset = true
+		}
+	}
+	for i := range r.Decisions {
+		d := &r.Decisions[i]
+		if d.Decider != "arb" {
+			continue
+		}
+		ids, isHit := hits[i]
+		if !isHit && !(reset && len(d.Edits) > 0) {
+			continue
+		}
+		reason := "契約の ID（" + strings.Join(ids, "・") + "）に触れる"
+		if !isHit {
+			reason = "契約に触れる裁定とカタログの変更が重なり、カタログの変更を戻した"
+		}
+		d.Question = fmt.Sprintf("ARB の裁定が%sので、gateflow が人へ回した。ARB の案：%s（根拠：%s）。この案でよいか、別の決定をするか。", reason, d.Answer, basisText(d.Basis))
+		d.Decider, d.Criterion, d.Answer, d.Basis, d.Edits = "human", "contract", "", nil, nil
+		converted = append(converted, i)
+	}
+	sort.Ints(converted)
+	r.Section2 = ""
+	r.Outcome = "escalated"
+	return converted, reset
 }
 
 // policyExists は、規約の参照（リポジトリの中のパスと、任意で行）が、ARB の見た版か渡した写しにあるかを確かめる。
@@ -223,11 +279,21 @@ func (e *Engine) checkARBStep(ctx context.Context, dir, seen string) error {
 	if err := e.Workspace.Snapshot(ctx, e.Ticket.ID, after); err != nil {
 		return err
 	}
-	changes, err := ValidateARB(ARBCheck{Result: e.lastARB, Review: e.lastReview, Seen: seen, In: filepath.Join(dir, "in"),
+	v, err := ValidateARB(ARBCheck{Result: e.lastARB, Review: e.lastReview, Seen: seen, In: filepath.Join(dir, "in"),
 		After: after, Project: e.Project, Rules: e.Rules})
 	var paths []string
-	for _, ch := range changes {
+	for _, ch := range v.Changes {
 		paths = append(paths, ch.Path)
+	}
+	if err == nil {
+		if converted, reset := applyContractGuard(e.lastARB, v.ContractHits); len(converted) > 0 {
+			if reset {
+				if err := e.Workspace.Reset(ctx, e.Ticket.ID); err != nil {
+					return err
+				}
+			}
+			e.log("arb-contract", map[string]any{"converted": converted, "hits": v.ContractHits, "catalogReset": reset})
+		}
 	}
 	var arb, human int
 	for _, d := range e.lastARB.Decisions {
