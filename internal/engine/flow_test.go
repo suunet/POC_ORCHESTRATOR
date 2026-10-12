@@ -384,14 +384,22 @@ func keys(m map[string]string) []string {
 
 // P2 の MUST と Q は質疑に変換して draft へ戻す。レビュー報告も作る。
 func TestRun_P2NeedsFix(t *testing.T) {
-	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Fix}, "p2-arbitrate": {arbEscalated}})
+	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {`{"outcome": "needs_fix", "summary": "穴がある",
+	  "findings": [
+	    {"label": "MUST", "finding": "UC-001 の要求とログの項目が対応していない", "evidence": {"id": "UC-001"}, "suggestion": "§2 に項目を書く"},
+	    {"label": "Q", "finding": "出力先は標準出力でよいか", "evidence": {"file": "backend/log.go", "line": 1}},
+	    {"label": "IMO", "finding": "名前", "evidence": {"file": "backend/log.go"}}]}`}})
 	res := mustRun(t, f)
-	if res.Outcome != engine.Gate || f.status(t) != ticket.Draft {
-		t.Fatalf("res = %+v, status %s", res, f.status(t))
+	if res.Outcome != engine.Gate || f.status(t) != ticket.Draft || f.runner.calls["p2-arbitrate"] != 0 {
+		t.Fatalf("res = %+v, status %s, ARB の呼び出し %d", res, f.status(t), f.runner.calls["p2-arbitrate"])
 	}
 	n, _ := f.e.Ticket.UnresolvedQuestions()
-	if n != 1 {
-		t.Errorf("未確定の質疑 = %d, want 1（ARB が人へ回した1件だけ。束ねた BJ の質問は重ねない）", n)
+	if n != 2 {
+		t.Errorf("未確定の質疑 = %d, want 2（MUST と Q。IMO は質疑にしない）", n)
+	}
+	q, _ := os.ReadFile(filepath.Join(f.root, ".docs/_stash/tickets/T-002/questions.md"))
+	if !strings.Contains(string(q), "指示書の修正が必要") || !strings.Contains(string(q), "§2 に項目を書く") {
+		t.Errorf("質疑:\n%s", q)
 	}
 	if _, err := os.Stat(filepath.Join(f.root, ".docs/_stash/tickets/T-002/reviews/01-p2-review.md")); err != nil {
 		t.Errorf("レビュー報告がない: %v", err)

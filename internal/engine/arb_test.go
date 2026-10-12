@@ -1,14 +1,17 @@
 package engine_test
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"gateflow/builtins"
 	"gateflow/internal/config"
 	"gateflow/internal/engine"
 	"gateflow/internal/ticket"
+	"gateflow/internal/workflow"
 )
 
 // P2 の差し戻し：MUST（UC-001 が根拠）と Q（出力先）と、Q と同じ内容の BJ の質問。IMO は裁定の対象にしない。
@@ -32,6 +35,27 @@ const arbResolved = `{"outcome": "resolved", "summary": "すべて裁定",
     {"findings": [0], "decider": "arb", "answer": "§2 に UC-001 のログの項目を書く", "basis": {"kind": "catalog", "ref": "UC-001"}, "edits": ["UC-001"]},
     {"findings": [1], "questions": [0], "decider": "arb", "answer": "標準出力に出す", "basis": {"kind": "standard", "ref": "十二要素のアプリのログ"}}]}`
 
+// newARBFlow は、P2 の差し戻しを ARB へ回す遷移表で newFlow を作る。組み込みの遷移表は M2.6 の試行の後に
+// 元の「質疑に登録して draft へ」に戻したが、ARB の実装は新しいモデルを評価するために残しているので、ここで確かめる。
+func newARBFlow(t *testing.T, body string, results map[string][]string) *flowFixture {
+	t.Helper()
+	data, err := fs.ReadFile(builtins.FS(), "workflows/aidd-impl.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const from = `"needs_fix": {"actions": ["findings-to-questions"], "to": "draft"}`
+	if !strings.Contains(string(data), from) {
+		t.Fatal("組み込みの遷移表に P2 の needs_fix の行がない")
+	}
+	wf, err := workflow.Parse([]byte(strings.Replace(string(data), from, `"needs_fix": {"next": "p2-arbitrate"}`, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFlow(t, body, results)
+	f.e.Workflow = wf
+	return f
+}
+
 func questionsText(t *testing.T, root string) string {
 	t.Helper()
 	data, _ := os.ReadFile(filepath.Join(root, ".docs/_stash/tickets/T-002", ticket.QuestionsFile))
@@ -40,7 +64,7 @@ func questionsText(t *testing.T, root string) string {
 
 // escalated：裁定したものは決定者 ARB・確定、人へ回すものだけ未回答で残し、§2 を直してコミットし、draft で止まる。
 func TestARB_Escalated(t *testing.T) {
-	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Fix}, "p2-arbitrate": {arbEscalated}})
+	f := newARBFlow(t, flowTicket, map[string][]string{"p2-review": {p2Fix}, "p2-arbitrate": {arbEscalated}})
 	res := mustRun(t, f)
 	if res.Outcome != engine.Gate || f.status(t) != ticket.Draft {
 		log, _ := os.ReadFile(filepath.Join(res.RunDir, "log.jsonl"))
@@ -70,7 +94,7 @@ func TestARB_Escalated(t *testing.T) {
 
 // resolved：すべて裁定したら、draft に戻さず P2 をもう一度回し、通れば P3 まで進む。
 func TestARB_ResolvedLoopsToP2(t *testing.T) {
-	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Fix, p2Approved}, "p2-arbitrate": {arbResolved}, "p3-prepare": {p3Done}})
+	f := newARBFlow(t, flowTicket, map[string][]string{"p2-review": {p2Fix, p2Approved}, "p2-arbitrate": {arbResolved}, "p3-prepare": {p3Done}})
 	f.ws.workChanges = map[string]string{".docs/design/uc/UC-001.md": "# UC-001\\n\\n| ID |\\n|---|\\n| UC-001-AC-01 |\\n| UC-001-AC-02 |\\n\\nUC-001 のログの項目\\n"}
 	res := mustRun(t, f)
 	if res.Outcome != engine.Gate || f.status(t) != ticket.ReadyToApprove || f.runner.calls["p2-review"] != 2 {
@@ -104,7 +128,7 @@ func TestARB_ForcedHumanWhenFindingRemains(t *testing.T) {
   "decisions": [
     {"findings": [0], "decider": "human", "criterion": "ambiguous", "question": "裁定が BJ に通らなかった。どうするか"},
     {"findings": [1], "questions": [0], "decider": "human", "criterion": "ambiguous", "question": "裁定が BJ に通らなかった。どうするか"}]}`
-	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Fix}, "p2-arbitrate": {arbResolved, again, forcedHuman}})
+	f := newARBFlow(t, flowTicket, map[string][]string{"p2-review": {p2Fix}, "p2-arbitrate": {arbResolved, again, forcedHuman}})
 	f.ws.workChanges = map[string]string{".docs/design/uc/UC-001.md": "# UC-001\\n\\n| ID |\\n|---|\\n| UC-001-AC-01 |\\n| UC-001-AC-02 |\\n\\nUC-001 のログの項目\\n"}
 	f.ws.workChangesOnce = true
 	f.e.Project.Limits = &config.Limits{ArbitrateLoops: 3}
@@ -120,7 +144,7 @@ func TestARB_ForcedHumanWhenFindingRemains(t *testing.T) {
 
 // ARB の往復が上限に達したら、ARB に裁定させず、BJ の指摘をそのまま人へ回す。
 func TestARB_LimitEscalatesToHuman(t *testing.T) {
-	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Fix}, "p2-arbitrate": {arbResolved}})
+	f := newARBFlow(t, flowTicket, map[string][]string{"p2-review": {p2Fix}, "p2-arbitrate": {arbResolved}})
 	f.ws.workChanges = map[string]string{".docs/design/uc/UC-001.md": "# UC-001\\n\\n| ID |\\n|---|\\n| UC-001-AC-01 |\\n| UC-001-AC-02 |\\n\\nUC-001 のログの項目\\n"}
 	f.e.Project.Limits = &config.Limits{ArbitrateLoops: 1}
 	f.e.Project.Contracts = nil
@@ -139,7 +163,7 @@ func TestARB_LimitEscalatesToHuman(t *testing.T) {
 // 契約の ID に触れる裁定は、ARB の判断によらず gateflow が人へ回す（Q-05。機械による二重の止め）。
 // 人へ回した裁定がカタログを直していたら、ARB のカタログの変更を戻し、§2 の書き換えも反映しない。
 func TestARB_ContractGuardEscalates(t *testing.T) {
-	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Fix}, "p2-arbitrate": {arbResolved}})
+	f := newARBFlow(t, flowTicket, map[string][]string{"p2-review": {p2Fix}, "p2-arbitrate": {arbResolved}})
 	f.ws.workChanges = map[string]string{".docs/design/uc/UC-001.md": "# UC-001\n\n| ID |\n|---|\n| UC-001-AC-01 |\n| UC-001-AC-02 |\n\nUC-001 のログの項目\n"}
 	f.e.Project.Contracts = []string{"UC-*"}
 	res := mustRun(t, f)
@@ -166,7 +190,7 @@ func TestARB_ChangesOutsideCatalogAreRejected(t *testing.T) {
 		"カタログの外":       {"backend/log.go": "package log\n\nfunc B() {}\n"},
 		"edits にない ID": {".docs/design/buc.md": "| BUC | UC |\n|---|---|\n| BUC-S01 | UC-001（システムの死活を確認する） |\n| BUC-S02 | UC-002 |\n"},
 	} {
-		f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Fix}, "p2-arbitrate": {arbResolved}})
+		f := newARBFlow(t, flowTicket, map[string][]string{"p2-review": {p2Fix}, "p2-arbitrate": {arbResolved}})
 		f.ws.workChanges = changes
 		res := mustRun(t, f)
 		if res.Outcome != engine.Stopped || res.Reason != "invalid-output" {

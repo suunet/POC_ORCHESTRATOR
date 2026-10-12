@@ -15,7 +15,7 @@
   "steps": {
     "p2-review": {"agent": "bj", "on": {
       "approved": {"next": "p3-prepare"},
-      "needs_fix": {"next": "p2-arbitrate"}
+      "needs_fix": {"actions": ["findings-to-questions"], "to": "draft"}
     }},
     "p2-arbitrate": {"agent": "arb", "on": {
       "resolved": {"actions": ["arb-answers", "arb-sections", "commit", "import"], "loop": "p2-review", "counter": "arbitrate"},
