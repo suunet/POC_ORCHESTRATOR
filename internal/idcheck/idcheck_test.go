@@ -246,3 +246,16 @@ func TestRun_DefinedIDs(t *testing.T) {
 		t.Error("定義のない UC-099 が定義されている")
 	}
 }
+
+// Matches は、設定のプレフィックスの形式に全体で一致する ID だけを受け付ける。
+func TestRules_Matches(t *testing.T) {
+	rules, err := idcheck.NewRules(testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]bool{"UC-001": true, "ACT-01": true, "UC-01": false, "UC-0012": false, "XYZ-01": false, "SHA-256": false} {
+		if got := rules.Matches(id); got != want {
+			t.Errorf("Matches(%q) = %v, want %v", id, got, want)
+		}
+	}
+}

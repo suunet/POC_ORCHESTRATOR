@@ -231,7 +231,11 @@ func (e *Engine) writeReview(step string) {
 	} else {
 		b.WriteString("| # | ラベル | 指摘 | 根拠（ファイル・行・ID） | 提案 | 対応 |\n| --- | --- | --- | --- | --- | --- |\n")
 		for i, f := range r.Findings {
-			fmt.Fprintf(&b, "| %d | %s | %s | %s | %s | 未対応 |\n", i+1, f.Label, cellText(f.Finding), cellText(evidenceText(f.Evidence)), cellText(f.Suggestion))
+			ev := evidenceText(f.Evidence)
+			if f.Evidence != nil && e.planned[f.Evidence.ID] {
+				ev += "（予定）"
+			}
+			fmt.Fprintf(&b, "| %d | %s | %s | %s | %s | 未対応 |\n", i+1, f.Label, cellText(f.Finding), cellText(ev), cellText(f.Suggestion))
 		}
 	}
 	b.WriteString("\nラベルの扱い：MUST と Q は遷移を止める。IMO は人のコードレビューで提示し、NR は将来の対応の候補として一覧にする。NITS・FYI は記録だけ。\n")

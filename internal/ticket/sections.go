@@ -224,6 +224,27 @@ func (t *Ticket) SetHold(on bool) error {
 	return nil
 }
 
+// TargetIDs は、項目の表の「対象ID」の欄の ID を返す。「、」やカンマで区切り、「（名前）」は除く。なければ空。
+func (t *Ticket) TargetIDs() []string {
+	for _, l := range strings.Split(t.Body, "\n") {
+		v, ok := tableValue(l, "対象ID")
+		if !ok {
+			continue
+		}
+		var ids []string
+		for _, f := range strings.FieldsFunc(v, func(r rune) bool { return r == '、' || r == ',' || r == '，' || r == ' ' }) {
+			if i := strings.IndexAny(f, "（("); i >= 0 {
+				f = f[:i]
+			}
+			if f = strings.TrimSpace(f); f != "" {
+				ids = append(ids, f)
+			}
+		}
+		return ids
+	}
+	return nil
+}
+
 // IssueID は、項目の表の「Issue」の欄（外部の課題の番号。人が書く）を返す。なければ空。
 func (t *Ticket) IssueID() string {
 	for _, l := range strings.Split(t.Body, "\n") {

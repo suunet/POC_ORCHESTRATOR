@@ -146,6 +146,17 @@ func TestHold(t *testing.T) {
 	}
 }
 
+func TestTargetIDs(t *testing.T) {
+	body := strings.Replace(fullTicket, "| Issue | 42 |\n", "| Issue | 42 |\n| 対象ID | NFR-06、UC-001（システムの死活を確認する）, VAR-20 |\n", 1)
+	got := load(t, body).TargetIDs()
+	if strings.Join(got, " ") != "NFR-06 UC-001 VAR-20" {
+		t.Errorf("TargetIDs = %q", got)
+	}
+	if got := load(t, fullTicket).TargetIDs(); got != nil {
+		t.Errorf("TargetIDs = %q, want なし", got)
+	}
+}
+
 func TestIssueID(t *testing.T) {
 	if got := load(t, fullTicket).IssueID(); got != "42" {
 		t.Errorf("IssueID = %q", got)

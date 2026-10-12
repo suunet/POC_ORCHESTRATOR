@@ -103,6 +103,16 @@ func NewRules(cfg config.IDs) (*Rules, error) {
 	return rules, nil
 }
 
+// Matches は、id が設定のどれかのプレフィックスの形式に、全体で一致するかを返す。
+func (r *Rules) Matches(id string) bool {
+	for _, p := range r.prefixes {
+		if p.fullMatch(id) {
+			return true
+		}
+	}
+	return false
+}
+
 type checker struct {
 	root     string
 	cfg      config.IDs

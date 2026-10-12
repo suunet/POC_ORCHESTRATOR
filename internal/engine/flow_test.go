@@ -472,6 +472,67 @@ func TestRun_TrackedPolicyFromClone(t *testing.T) {
 	}
 }
 
+// 指示書の対象ID に挙げた予定の ID は、カタログになくても根拠に使える。報告に「（予定）」と出す（Q-24）。
+func TestRun_EvidencePlannedID(t *testing.T) {
+	body := strings.Replace(flowTicket, "| ブランチ |", "| 対象ID | UC-001、UC-009 |\n| ブランチ |", 1)
+	f := newFlow(t, body, map[string][]string{
+		"p2-review": {`{"outcome": "approved", "summary": "s", "findings": [
+		  {"label": "FYI", "finding": "UC-009 はまだない", "evidence": {"id": "UC-009"}}]}`},
+		"p3-prepare": {p3Done},
+	})
+	res := mustRun(t, f)
+	if res.Outcome != engine.Gate || f.runner.calls["p2-review"] != 1 {
+		t.Fatalf("res = %+v, p2 の呼び出し = %d", res, f.runner.calls["p2-review"])
+	}
+	review, _ := os.ReadFile(filepath.Join(f.root, ".docs/_stash/tickets/T-002/reviews/01-p2-review.md"))
+	if !strings.Contains(string(review), "UC-009（予定）") {
+		t.Errorf("報告に予定の印がない:\n%s", review)
+	}
+	log, _ := os.ReadFile(filepath.Join(res.RunDir, "log.jsonl"))
+	if !strings.Contains(string(log), `"checked":"planned"`) {
+		t.Errorf("予定の ID の記録がない:\n%s", log)
+	}
+}
+
+// 対象ID にない ID や、ID の形式に合わない ID は、予定として受け付けない。
+func TestRun_EvidenceNotPlanned(t *testing.T) {
+	body := strings.Replace(flowTicket, "| ブランチ |", "| 対象ID | UC-001、UC-009、XYZ-1 |\n| ブランチ |", 1)
+	for _, id := range []string{"UC-008", "XYZ-1"} {
+		f := newFlow(t, body, map[string][]string{
+			"p2-review":  {`{"outcome": "approved", "summary": "s", "findings": [{"label": "FYI", "finding": "f", "evidence": {"id": "` + id + `"}}]}`, p2Approved},
+			"p3-prepare": {p3Done},
+		})
+		mustRun(t, f)
+		if f.runner.calls["p2-review"] != 2 {
+			t.Errorf("%s: p2 の呼び出し = %d, want 2（出力の不正で再実行）", id, f.runner.calls["p2-review"])
+		}
+	}
+}
+
+// P5 後に、対象ID の予定の ID がカタログになければ、P5 へ差し戻す（Q-24）。
+func TestRun_TargetIDMissingAfterP5(t *testing.T) {
+	body := strings.Replace(approvedTicket(t), "| ブランチ |", "| 対象ID | UC-001、UC-009 |\n| ブランチ |", 1)
+	f := newFlow(t, body, map[string][]string{"p5": {p5Done}, "p5-verify": {vApproved}})
+	res := mustRun(t, f)
+	if f.runner.calls["p5"] < 2 || res.Outcome != engine.Stopped {
+		t.Fatalf("res = %+v, P5 の呼び出し = %d", res, f.runner.calls["p5"])
+	}
+	log, _ := os.ReadFile(filepath.Join(res.RunDir, "log.jsonl"))
+	if !strings.Contains(string(log), `"target-ids-missing"`) || !strings.Contains(string(log), "UC-009") {
+		t.Errorf("対象ID の不足の記録がない:\n%s", log)
+	}
+	fb, _ := filepath.Glob(filepath.Join(res.RunDir, "steps", "*", "feedback.md"))
+	found := false
+	for _, p := range fb {
+		if b, _ := os.ReadFile(p); strings.Contains(string(b), "UC-009") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("差し戻しの内容に UC-009 がない: %v", fb)
+	}
+}
+
 func approvedTicket(t *testing.T) string {
 	t.Helper()
 	body := strings.Replace(flowTicket, "ステータス: ready-to-prepare", "ステータス: ready-to-implement", 1)

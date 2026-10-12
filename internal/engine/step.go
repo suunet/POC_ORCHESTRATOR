@@ -207,6 +207,20 @@ func (e *Engine) readOutput(step string, def stepDef, dir, seen string) (string,
 		if err := e.checkEvidence(seen, filepath.Join(dir, "in")); err != nil {
 			return "", err
 		}
+		if step == "p5-verify" && (outcome == "approved" || outcome == "needs_fix") {
+			if missing, err := e.missingTargets(seen); err != nil {
+				return "", err
+			} else if len(missing) > 0 {
+				// 予定の ID が P5 で書かれていなければ、P5 後の差し戻しにする（Q-24）
+				e.log("target-ids-missing", map[string]any{"ids": missing})
+				for _, id := range missing {
+					e.lastReview.Findings = append(e.lastReview.Findings, output.Finding{Label: "MUST",
+						Finding: fmt.Sprintf("指示書の対象ID の %s が、カタログにない（予定の ID を P5 で書いていない）", id)})
+				}
+				outcome = "needs_fix"
+				e.lastReview.Outcome = outcome
+			}
+		}
 		e.findings = FindingKeys(e.lastReview.Findings)
 	}
 	return outcome, nil
@@ -220,6 +234,9 @@ func (e *Engine) checkEvidence(seen, in string) error {
 	var ids *idcheck.Result
 	var errs []error
 	var hits []map[string]any
+	if e.planned == nil {
+		e.planned = map[string]bool{}
+	}
 	for i, f := range e.lastReview.Findings {
 		ev := f.Evidence
 		if ev.File != "" {
@@ -243,10 +260,15 @@ func (e *Engine) checkEvidence(seen, in string) error {
 				}
 				ids = &r
 			}
-			if !ids.Defined(ev.ID) && !appearsInCatalog(seen, ev.ID) {
-				errs = append(errs, fmt.Errorf("findings[%d] の根拠の ID %s が、カタログにない", i, ev.ID))
-			} else {
+			switch {
+			case ids.Defined(ev.ID) || appearsInCatalog(seen, ev.ID):
 				hits = append(hits, map[string]any{"finding": i, "id": ev.ID, "checked": "catalog"})
+			case e.plannedID(ev.ID):
+				// 指示書の対象ID に挙げた、これから作る ID（Q-24）。P5 後に実在を確かめる
+				e.planned[ev.ID] = true
+				hits = append(hits, map[string]any{"finding": i, "id": ev.ID, "checked": "planned"})
+			default:
+				errs = append(errs, fmt.Errorf("findings[%d] の根拠の ID %s が、カタログにない", i, ev.ID))
 			}
 		}
 	}
@@ -301,6 +323,29 @@ func snapshotInputs(inputs []container.Mount, dir string) ([]container.Mount, er
 		out = append(out, m)
 	}
 	return out, nil
+}
+
+// plannedID は、id が指示書の対象ID に挙げてあり、ID の形式に合うか（予定の ID として根拠に使えるか。Q-24）を返す。
+func (e *Engine) plannedID(id string) bool {
+	return e.Rules != nil && e.Rules.Matches(id) && slices.Contains(e.Ticket.TargetIDs(), id)
+}
+
+// missingTargets は、指示書の対象ID のうち、ID の形式に合うのに BJ の見た版のカタログにないものを返す。
+func (e *Engine) missingTargets(seen string) ([]string, error) {
+	if e.Rules == nil {
+		return nil, nil
+	}
+	r, err := idcheck.Run(seen, e.Rules)
+	if err != nil {
+		return nil, err
+	}
+	var missing []string
+	for _, id := range e.Ticket.TargetIDs() {
+		if e.Rules.Matches(id) && !r.Defined(id) && !appearsInCatalog(seen, id) {
+			missing = append(missing, id)
+		}
+	}
+	return missing, nil
 }
 
 func countLines(data []byte) int {
