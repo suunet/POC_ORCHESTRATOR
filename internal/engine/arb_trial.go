@@ -32,7 +32,8 @@ type TrialResult struct {
 }
 
 // ARBTrial は、過去の P2 の差し戻しの記録（src：runs/<日時>/steps/NN-p2-review。その時点の写しがそろっている）を入力に、
-// ARB を本番と同じコンテナと Instruction で動かし、本番と同じ検査をする（M2.6 の試験）。結果は dest に置く。
+// ARB を本番と同じコンテナと Instruction で動かし、本番と同じ検査をする（M2.6 の試験）。
+// 結果は dest/<時刻>/ に置き、dest/latest にその時刻を書く（前の試験は消さない）。
 // 作業場所の clone は使わず、src の seen（BJ が見た版）を写した作業ツリーで動かす。コミットも質疑の書き込みもしない。
 func (e *Engine) ARBTrial(ctx context.Context, src, dest string) (TrialResult, error) {
 	var res TrialResult
@@ -48,7 +49,15 @@ func (e *Engine) ARBTrial(ctx context.Context, src, dest string) (TrialResult, e
 		return res, fmt.Errorf("%s の P2 は差し戻していない（%s）", src, review.Outcome)
 	}
 	e.lastReview = review
-	if err := os.RemoveAll(dest); err != nil {
+	// NOTE: Docker Desktop は、消してすぐ同じパスに作り直したディレクトリを bind できないことがある
+	// （bind source path does not exist）。試験のたびに新しいディレクトリを使い、前の試験は消さない
+	stamp := e.Now().UTC().Format("20060102-150405")
+	top := dest
+	dest = filepath.Join(top, stamp)
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return res, err
+	}
+	if err := os.WriteFile(filepath.Join(top, "latest"), []byte(stamp+"\n"), 0o644); err != nil {
 		return res, err
 	}
 	in := filepath.Join(dest, "in")
@@ -111,11 +120,8 @@ func (e *Engine) ARBTrial(ctx context.Context, src, dest string) (TrialResult, e
 	cmd, stdin := e.Agent.Command(req)
 	for attempt := 1; attempt <= 1+outputRetries; attempt++ {
 		res.Attempts = attempt
-		// NOTE: Docker Desktop は、消してすぐ同じパスに作り直したディレクトリを bind できないことがある
-		// （bind source path does not exist）。やり直しの試験でも、試みごとに新しい名前を使う
-		stamp := e.Now().UTC().Format("20060102-150405")
-		work := filepath.Join(dest, fmt.Sprintf("work-%s-%d", stamp, attempt))
-		outDir := filepath.Join(dest, fmt.Sprintf("out-%s-%d", stamp, attempt))
+		work := filepath.Join(dest, fmt.Sprintf("work-%d", attempt))
+		outDir := filepath.Join(dest, fmt.Sprintf("out-%d", attempt))
 		if err := copyTree(filepath.Join(src, "seen"), work); err != nil {
 			return res, err
 		}
