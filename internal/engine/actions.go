@@ -41,6 +41,8 @@ func (e *Engine) doActions(ctx context.Context, st *State, step string, actions 
 			}
 		case "arb-escalate":
 			err = e.arbEscalate()
+		case "arb-report":
+			err = e.arbReport(ctx)
 		case "findings-to-questions":
 			err = e.findingsToQuestions(step)
 		case "questions-from-output":

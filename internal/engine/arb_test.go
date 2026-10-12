@@ -82,6 +82,15 @@ func TestARB_ResolvedLoopsToP2(t *testing.T) {
 	if q := questionsText(t, f.root); !strings.Contains(q, "規格（記憶による）：十二要素のアプリのログ") {
 		t.Errorf("規格の印がない:\n%s", q)
 	}
+	// 承認の前の監査：ARB の裁定の一覧と、カタログの差分（カタログの外の差分は出さない）
+	report, err := os.ReadFile(filepath.Join(res.RunDir, "arb-report.md"))
+	if err != nil || !strings.Contains(string(report), "## 裁定（2 件）") || !strings.Contains(string(report), "| Q-02 |") ||
+		!strings.Contains(string(report), "+UC-001 のログの項目") || strings.Contains(string(report), "backend/log.go") {
+		t.Errorf("arb-report.md（%v）:\n%s", err, report)
+	}
+	if !strings.Contains(res.Next, "arb-report.md") {
+		t.Errorf("次の操作 = %q", res.Next)
+	}
 	log, _ := os.ReadFile(filepath.Join(res.RunDir, "log.jsonl"))
 	if !strings.Contains(string(log), `"counter":"arbitrate"`) || !strings.Contains(string(log), `"changed":[".docs/design/uc/UC-001.md"]`) {
 		t.Errorf("記録:\n%s", log)

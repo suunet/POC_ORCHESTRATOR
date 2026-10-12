@@ -41,31 +41,51 @@ type QuestionInfo struct {
 	Decider string
 }
 
-// QuestionStates は、質疑のファイルの中身から、Q 番号ごとの状態と決定者を返す（決定者の列がなければ人）。
-func QuestionStates(data []byte) map[string]QuestionInfo {
-	out := map[string]QuestionInfo{}
-	stateCol, deciderCol := -1, -1
+// QuestionRow は、質疑の一覧の表の1行。
+type QuestionRow struct {
+	ID      string
+	Summary string
+	State   string
+	Decider string // 決定者の列がなければ人
+	Basis   string
+}
+
+// QuestionRows は、質疑のファイルの中身から、一覧の表の行を順に返す。
+func QuestionRows(data []byte) []QuestionRow {
+	var out []QuestionRow
+	col := map[string]int{}
 	for _, l := range strings.Split(string(data), "\n") {
 		cells := splitCells(l)
 		if len(cells) > 1 && cells[0] == "#" {
+			col = map[string]int{}
 			for i, c := range cells {
-				switch c {
-				case "状態":
-					stateCol = i
-				case "決定者":
-					deciderCol = i
-				}
+				col[c] = i
 			}
 			continue
 		}
-		if !questionRow.MatchString(strings.TrimSpace(l)) || stateCol < 0 || stateCol >= len(cells) {
+		if !questionRow.MatchString(strings.TrimSpace(l)) {
 			continue
 		}
-		info := QuestionInfo{State: cells[stateCol], Decider: "人"}
-		if deciderCol >= 0 && deciderCol < len(cells) && cells[deciderCol] != "" {
-			info.Decider = cells[deciderCol]
+		get := func(name string) string {
+			if i, ok := col[name]; ok && i < len(cells) {
+				return cells[i]
+			}
+			return ""
 		}
-		out[cells[0]] = info
+		r := QuestionRow{ID: cells[0], Summary: get("質問（要約）"), State: get("状態"), Decider: get("決定者"), Basis: get("根拠")}
+		if r.Decider == "" {
+			r.Decider = "人"
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// QuestionStates は、質疑のファイルの中身から、Q 番号ごとの状態と決定者を返す（決定者の列がなければ人）。
+func QuestionStates(data []byte) map[string]QuestionInfo {
+	out := map[string]QuestionInfo{}
+	for _, r := range QuestionRows(data) {
+		out[r.ID] = QuestionInfo{State: r.State, Decider: r.Decider}
 	}
 	return out
 }

@@ -341,3 +341,58 @@ func (e *Engine) arbCommitMessage() string {
 	}
 	return msg
 }
+
+// arbReport は、承認の前の監査のために、ARB の裁定の一覧と、作業ブランチのカタログの差分を実行の記録に書く（M2.6）。
+func (e *Engine) arbReport(ctx context.Context) error {
+	var rows []ticket.QuestionRow
+	if data, err := os.ReadFile(filepath.Join(filepath.Dir(e.Ticket.Path), ticket.QuestionsFile)); err == nil {
+		for _, r := range ticket.QuestionRows(data) {
+			if r.Decider == "ARB" {
+				rows = append(rows, r)
+			}
+		}
+	}
+	diff, err := e.Workspace.Diff(ctx, e.Ticket.ID, e.Project.Branch.Main)
+	if err != nil {
+		return err
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s ARB の裁定（承認の前の監査）\n\n質疑の決定者が ARB の行の一覧と、作業ブランチのカタログの差分（%s との比較、%s の下だけ）。反対なら、質疑の回答を書き直して決定者を人にし、gateflow ready で P2 からやり直す。\n\n## 裁定（%d 件）\n\n",
+		e.Ticket.ID, e.Project.Branch.Main, catalogDir, len(rows))
+	if len(rows) == 0 {
+		b.WriteString("なし\n")
+	} else {
+		b.WriteString("| 質疑 | 要約 | 根拠 |\n| --- | --- | --- |\n")
+		for _, r := range rows {
+			fmt.Fprintf(&b, "| %s | %s | %s |\n", r.ID, r.Summary, r.Basis)
+		}
+	}
+	catalog := catalogDiff(diff)
+	b.WriteString("\n## カタログの差分\n\n")
+	if catalog == "" {
+		b.WriteString("なし\n")
+	} else {
+		b.WriteString("```diff\n" + catalog + "```\n")
+	}
+	path := filepath.Join(e.run.Dir, "arb-report.md")
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		return err
+	}
+	e.log("arb-report", map[string]any{"decisions": len(rows), "path": path})
+	return nil
+}
+
+// catalogDiff は、git の差分から、カタログ（.docs/design/）のファイルの部分だけを取り出す。
+func catalogDiff(diff string) string {
+	var b strings.Builder
+	keep := false
+	for _, l := range strings.SplitAfter(diff, "\n") {
+		if strings.HasPrefix(l, "diff --git ") {
+			keep = strings.HasPrefix(strings.TrimPrefix(l, "diff --git "), "a/"+catalogDir)
+		}
+		if keep {
+			b.WriteString(l)
+		}
+	}
+	return b.String()
+}

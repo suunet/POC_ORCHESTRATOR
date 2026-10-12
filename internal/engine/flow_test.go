@@ -154,7 +154,7 @@ func (w *flowWorkspace) Export(_ context.Context, _, dest string) (string, error
 	return fmt.Sprintf("c%d", len(w.commits)), nil
 }
 func (w *flowWorkspace) Diff(context.Context, string, string) (string, error) {
-	return "diff --git a/backend/log.go b/backend/log.go\n", nil
+	return "diff --git a/backend/log.go b/backend/log.go\n+code\ndiff --git a/.docs/design/uc/UC-001.md b/.docs/design/uc/UC-001.md\n+UC-001 のログの項目\n", nil
 }
 func (w *flowWorkspace) Tracked(_ context.Context, _, path string) bool { return w.tracked[path] }
 func (w *flowWorkspace) TreeHash(context.Context, string) (string, error) {

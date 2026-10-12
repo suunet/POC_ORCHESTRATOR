@@ -78,7 +78,7 @@ var KnownGuards = []string{"questions-resolved", "approval-checked", "branch-mer
 var KnownActions = []string{
 	"findings-to-questions", "questions-from-output", "write-sections",
 	"check-sections", "check-acceptance", "check-ids", "commit", "import",
-	"arb-answers", "arb-sections", "arb-escalate",
+	"arb-answers", "arb-sections", "arb-escalate", "arb-report",
 }
 
 // Outcomes は、step のあり得る outcome を返す。
