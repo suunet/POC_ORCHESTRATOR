@@ -113,6 +113,24 @@ func (r *Rules) Matches(id string) bool {
 	return false
 }
 
+// FindIDs は、text に出てくる ID（設定のプレフィックスの形式に合い、前後が別の語の一部でないもの）を、出てきた順に重ねずに返す。
+func (r *Rules) FindIDs(text string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, p := range r.prefixes {
+		for _, loc := range p.re.FindAllStringIndex(text, -1) {
+			if !boundaryBefore(text, loc[0]) || !boundaryAfter(text, loc[1]) {
+				continue
+			}
+			if id := text[loc[0]:loc[1]]; !seen[id] {
+				seen[id] = true
+				out = append(out, id)
+			}
+		}
+	}
+	return out
+}
+
 type checker struct {
 	root     string
 	cfg      config.IDs

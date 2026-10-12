@@ -16,6 +16,7 @@ import (
 	"gateflow/internal/agent"
 	"gateflow/internal/config"
 	"gateflow/internal/container"
+	"gateflow/internal/workspace"
 )
 
 // Check は、サンドボックスで試す1つのこと。Expect が fail なら失敗すること、ok なら成功することを確かめる。
@@ -99,7 +100,7 @@ func (s *Sandbox) Run(ctx context.Context) ([]CheckResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf(".env のひな形を読めない: %w", err)
 	}
-	if _, err := s.Workspace.Prepare(ctx, sandboxTicket, "gateflow-doctor", s.Project.Branch.Main, s.Project.Deps); err != nil {
+	if _, err := s.Workspace.Prepare(ctx, sandboxTicket, "gateflow-doctor", s.Project.Branch.Main, s.Project.Deps, workspace.PrepareOptions{}); err != nil {
 		return nil, err
 	}
 	allow := append(slices.Clone(s.Agent.Hosts()), s.Project.Agent.Allow...)

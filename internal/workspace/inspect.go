@@ -33,6 +33,39 @@ git rev-parse HEAD
 git archive --format=tar HEAD
 `
 
+// NOTE: Git 管理のファイルと、無視されていない新しいファイルだけを書き出す（.env など無視したものは含めない）
+const snapshotScript = `set -eu
+cd /work
+git ls-files -co --exclude-standard -z > /tmp/files
+tr '\0' '\n' < /tmp/files | while IFS= read -r f; do [ -f "$f" ] && [ ! -L "$f" ] && printf '%s\0' "$f"; done | tar --null -T - -cf -
+`
+
+// Snapshot は、clone の作業ツリー（コミットしていない変更を含む。無視したファイルは含めない）をホストの dest に展開する。
+// ARB が作業ツリーで直したカタログの変更を、コミットの前に確かめるのに使う（M2.6）。
+func (w *Workspace) Snapshot(ctx context.Context, ticketID, dest string) error {
+	var out bytes.Buffer
+	if err := w.run(ctx, w.spec(ticketID, "snapshot", w.readOnlyRepo(ticketID), nil, snapshotScript), &out); err != nil {
+		return fmt.Errorf("作業ツリーを書き出せない: %w", err)
+	}
+	return untar(&out, dest)
+}
+
+const resetScript = `set -eu
+cd /work
+git -c core.hooksPath=/dev/null reset -q --hard HEAD
+git clean -q -fd
+`
+
+// Reset は、clone の作業ツリーを HEAD に戻す（コミットしていない変更と、無視されていない新しいファイルを消す）。
+// ARB をやり直す前に、前の試みの書きかけを消すのに使う（M2.6）。
+func (w *Workspace) Reset(ctx context.Context, ticketID string) error {
+	mounts := []container.Mount{{Type: container.Volume, Source: w.Volume(), Subpath: ticketID + "/repo", Target: "/work"}}
+	if err := w.run(ctx, w.spec(ticketID, "reset", mounts, nil, resetScript), io.Discard); err != nil {
+		return fmt.Errorf("作業ツリーを戻せない: %w", err)
+	}
+	return nil
+}
+
 // Tracked は、path がプロジェクトの main で Git 管理されているかを返す（規約を clone の版から渡すかの判定。Q-23）。
 func (w *Workspace) Tracked(ctx context.Context, mainBranch, path string) bool {
 	_, err := w.git(ctx, "cat-file", "-e", mainBranch+":"+path)

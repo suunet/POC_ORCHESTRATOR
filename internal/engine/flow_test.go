@@ -92,16 +92,42 @@ const (
 
 // flowWorkspace は、workspace の偽物。書き出しでカタログを展開する。
 type flowWorkspace struct {
-	commits  []string
-	imports  []string
-	trees    []string // TreeHash が順に返す値。尽きたら呼ばれるたびに違う値
-	treeCall int
-	prepared workspace.Prepared
-	tracked  map[string]bool
+	commits     []string
+	imports     []string
+	trees       []string // TreeHash が順に返す値。尽きたら呼ばれるたびに違う値
+	treeCall    int
+	prepared    workspace.Prepared
+	prepareOpts []workspace.PrepareOptions
+	tracked     map[string]bool
+	workChanges map[string]string // ARB が作業ツリーで直したことにするファイル（Snapshot に重ねる）
+	// workChangesOnce なら、最初の Snapshot（最初の ARB）でだけ直したことにする
+	workChangesOnce bool
+	snapshots       int
+	resets          int
 }
 
-func (w *flowWorkspace) Prepare(context.Context, string, string, string, *config.Deps) (workspace.Prepared, error) {
+func (w *flowWorkspace) Prepare(_ context.Context, _, _, _ string, _ *config.Deps, opt workspace.PrepareOptions) (workspace.Prepared, error) {
+	w.prepareOpts = append(w.prepareOpts, opt)
 	return w.prepared, nil
+}
+func (w *flowWorkspace) Snapshot(_ context.Context, _, dest string) error {
+	for p, body := range catalog {
+		os.MkdirAll(filepath.Dir(filepath.Join(dest, p)), 0o755)
+		os.WriteFile(filepath.Join(dest, p), []byte(body), 0o644)
+	}
+	w.snapshots++
+	if w.workChangesOnce && w.snapshots > 1 {
+		return nil
+	}
+	for p, body := range w.workChanges {
+		os.MkdirAll(filepath.Dir(filepath.Join(dest, p)), 0o755)
+		os.WriteFile(filepath.Join(dest, p), []byte(body), 0o644)
+	}
+	return nil
+}
+func (w *flowWorkspace) Reset(context.Context, string) error {
+	w.resets++
+	return nil
 }
 func (w *flowWorkspace) AgentMounts(id string) []container.Mount {
 	return []container.Mount{
@@ -155,7 +181,7 @@ func newRunner(results map[string][]string) *flowRunner {
 }
 
 func stepOf(name string) string {
-	for _, s := range []string{"p5-verify", "p2-review", "p3-prepare", "p5"} {
+	for _, s := range []string{"p5-verify", "p2-review", "p2-arbitrate", "p3-prepare", "p5"} {
 		if strings.HasSuffix(name, "-"+s) {
 			return s
 		}
@@ -358,22 +384,14 @@ func keys(m map[string]string) []string {
 
 // P2 の MUST と Q は質疑に変換して draft へ戻す。レビュー報告も作る。
 func TestRun_P2NeedsFix(t *testing.T) {
-	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {`{"outcome": "needs_fix", "summary": "穴がある",
-	  "findings": [
-	    {"label": "MUST", "finding": "UC-001 の要求とログの項目が対応していない", "evidence": {"id": "UC-001"}, "suggestion": "§2 に項目を書く"},
-	    {"label": "Q", "finding": "出力先は標準出力でよいか", "evidence": {"file": "backend/log.go", "line": 1}},
-	    {"label": "IMO", "finding": "名前", "evidence": {"file": "backend/log.go"}}]}`}})
+	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Fix}, "p2-arbitrate": {arbEscalated}})
 	res := mustRun(t, f)
 	if res.Outcome != engine.Gate || f.status(t) != ticket.Draft {
 		t.Fatalf("res = %+v, status %s", res, f.status(t))
 	}
 	n, _ := f.e.Ticket.UnresolvedQuestions()
-	if n != 2 {
-		t.Errorf("未確定の質疑 = %d, want 2（MUST と Q。IMO は質疑にしない）", n)
-	}
-	q, _ := os.ReadFile(filepath.Join(f.root, ".docs/_stash/tickets/T-002/questions.md"))
-	if !strings.Contains(string(q), "指示書の修正が必要") || !strings.Contains(string(q), "§2 に項目を書く") {
-		t.Errorf("質疑:\n%s", q)
+	if n != 1 {
+		t.Errorf("未確定の質疑 = %d, want 1（ARB が人へ回した1件だけ。束ねた BJ の質問は重ねない）", n)
 	}
 	if _, err := os.Stat(filepath.Join(f.root, ".docs/_stash/tickets/T-002/reviews/01-p2-review.md")); err != nil {
 		t.Errorf("レビュー報告がない: %v", err)

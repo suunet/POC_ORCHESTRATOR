@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -58,6 +59,17 @@ var stepDefs = map[string]stepDef{
 		}
 		return r.Outcome, nil
 	}},
+	"p2-arbitrate": {"prompts/instructions/p2-arbitrate.md", output.DescribeARB, func(e *Engine, d []byte) (string, error) {
+		if e.lastReview == nil {
+			return "", fmt.Errorf("ARB に渡す P2 の結果がない")
+		}
+		r, err := output.ParseARB(d, e.lastReview, e.arbForced)
+		if err != nil {
+			return "", err
+		}
+		e.lastARB = r
+		return r.Outcome, nil
+	}},
 	"p5-verify": {"prompts/instructions/p5-verify.md", output.DescribeP5Verify, func(e *Engine, d []byte) (string, error) {
 		r, err := output.ParseP5Verify(d)
 		if err != nil {
@@ -105,9 +117,15 @@ func (e *Engine) agentStep(ctx context.Context, st *State, step, role, dir strin
 		return "", err
 	}
 
-	// BJ が見る版を書き出して記録する（根拠の確認は、この版に対して行う。Q-20）
+	// BJ が見る版を書き出して記録する（根拠の確認は、この版に対して行う。Q-20）。
+	// ARB は作業ツリーを書くので、前の書きかけを消してから、直す前の版を書き出す（変更の検査の比べる元。M2.6）
 	var seen string
-	if role == "bj" {
+	if role == "bj" || role == "arb" {
+		if role == "arb" {
+			if err := e.Workspace.Reset(ctx, e.Ticket.ID); err != nil {
+				return "", err
+			}
+		}
 		seen = filepath.Join(dir, "seen")
 		hash, err := e.Workspace.Export(ctx, e.Ticket.ID, seen)
 		if err != nil {
@@ -139,11 +157,13 @@ func (e *Engine) agentStep(ctx context.Context, st *State, step, role, dir strin
 		inputs = append(inputs, container.Mount{Type: container.Bind, Source: src, Target: target, ReadOnly: true})
 		policies = append(policies, prompt.PolicyFile{Path: target, Purpose: pol.Purpose})
 	}
-	if role == "bj" {
-		// BJ に渡す入力は写しにして、根拠の検査をその写しに対して行う（Q-22）
+	if role == "bj" || role == "arb" {
+		// BJ と ARB に渡す入力は写しにして、根拠の検査をその写しに対して行う（Q-22）
 		if inputs, err = snapshotInputs(inputs, filepath.Join(dir, "in")); err != nil {
 			return "", err
 		}
+	}
+	if role == "bj" {
 		knowledge = append(knowledge, "指摘の根拠のファイルは、作業場所のファイルならリポジトリの中のパス（例：`.docs/design/uc/UC-001.md`）、渡した入力なら`/in/`のパス（例：`/in/ticket.md`）で書く")
 	}
 	req, err := e.prompt(step, role, def, knowledge, policies)
@@ -153,9 +173,13 @@ func (e *Engine) agentStep(ctx context.Context, st *State, step, role, dir strin
 	os.WriteFile(filepath.Join(dir, "prompt.md"), []byte("# システムプロンプト（追加分）\n\n"+req.System+"\n\n# ユーザーメッセージ\n\n"+req.Prompt), 0o644)
 
 	mounts, envFile := e.Workspace.AgentMounts(e.Ticket.ID), filepath.Join(root, e.Project.Agent.EnvTemplate)
-	if role == "bj" {
+	switch role {
+	case "bj":
 		// BJ には clone を .git を含めて読み取り専用で渡し、.env は渡さない
 		mounts, envFile = e.Workspace.ReviewerMounts(e.Ticket.ID), ""
+	case "arb":
+		// ARB はカタログを作業ツリーで直す（.git は読み取り専用）。.env は渡さない
+		envFile = ""
 	}
 	limits := e.Project.EffectiveLimits()
 	cmd, stdin := e.Agent.Command(req)
@@ -167,6 +191,11 @@ func (e *Engine) agentStep(ctx context.Context, st *State, step, role, dir strin
 
 	for attempt := 1; attempt <= 1+outputRetries; attempt++ {
 		os.Remove(filepath.Join(outDir, "result.json"))
+		if role == "arb" && attempt > 1 {
+			if err := e.Workspace.Reset(ctx, e.Ticket.ID); err != nil {
+				return "", err
+			}
+		}
 		spec.Stdin = strings.NewReader(stdin)
 		e.log("agent-start", map[string]any{"step": step, "attempt": attempt})
 		code, err := e.runLogged(ctx, spec, dir, fmt.Sprintf("agent-%d", attempt))
@@ -177,10 +206,16 @@ func (e *Engine) agentStep(ctx context.Context, st *State, step, role, dir strin
 		if err != nil {
 			return "", err
 		}
-		outcome, err := e.readOutput(step, def, dir, seen)
+		outcome, err := e.readOutput(ctx, step, def, dir, seen)
 		if err == nil {
 			if role == "bj" {
 				e.writeReview(step)
+			}
+			switch step {
+			case "p2-review":
+				st.Review = filepath.Join(outDir, "result.json")
+			case "p2-arbitrate":
+				st.ArbDecided = e.arbDecided()
 			}
 			if step == "p5" {
 				st.DevResult = filepath.Join(outDir, "result.json")
@@ -195,7 +230,7 @@ func (e *Engine) agentStep(ctx context.Context, st *State, step, role, dir strin
 	return "", stop("invalid-output", "%s の出力の形が、再実行しても正しくない", step)
 }
 
-func (e *Engine) readOutput(step string, def stepDef, dir, seen string) (string, error) {
+func (e *Engine) readOutput(ctx context.Context, step string, def stepDef, dir, seen string) (string, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "out", "result.json"))
 	if err != nil {
 		return "", fmt.Errorf("%s がない", output.ResultPath)
@@ -203,6 +238,9 @@ func (e *Engine) readOutput(step string, def stepDef, dir, seen string) (string,
 	outcome, err := def.parse(e, data)
 	if err != nil {
 		return "", err
+	}
+	if step == "p2-arbitrate" {
+		return outcome, e.checkARBStep(ctx, dir, seen)
 	}
 	if seen != "" {
 		if err := e.checkEvidence(seen, filepath.Join(dir, "in")); err != nil {
@@ -393,6 +431,34 @@ func (e *Engine) inputs(ctx context.Context, st *State, step, dir string) ([]con
 		knowledge = append(knowledge, "前回の差し戻しの内容は`/in/feedback.md`。これを直すことを最初に行う")
 	}
 	switch step {
+	case "p2-arbitrate":
+		if st.Review == "" {
+			return nil, nil, fmt.Errorf("ARB に渡す P2 の結果がない")
+		}
+		if e.lastReview == nil { // resume で ARB から再開したとき
+			data, err := os.ReadFile(st.Review)
+			if err != nil {
+				return nil, nil, err
+			}
+			if e.lastReview, err = output.ParseP2(data); err != nil {
+				return nil, nil, err
+			}
+		}
+		e.arbForced = arbForced(e.lastReview, st.ArbDecided)
+		forced, _ := json.Marshal(map[string][]int{"findings": e.arbForced})
+		forcedPath := filepath.Join(dir, "forced.json")
+		if err := os.WriteFile(forcedPath, forced, 0o644); err != nil {
+			return nil, nil, err
+		}
+		mounts = append(mounts, bind(st.Review, "/in/review.json"), bind(forcedPath, "/in/forced.json"))
+		knowledge = append(knowledge,
+			"BJ の P2 のレビューの出力（findings と questions）は`/in/review.json`。番号は 0 から数える",
+			"`/in/forced.json`の findings の番号は、前の回に ARB が裁定したのに BJ の指摘が残ったもの。必ず人へ回す（decider を human にする）",
+			"カタログ（`/work/.docs/design/`）は作業ツリーで直してよい。それ以外のファイルは変えない。コミットは gateflow が行う",
+			"外のサイトは読めない。規格を根拠にするときは、記憶によることを前提に kind を standard にする")
+		if len(e.Project.Contracts) > 0 {
+			knowledge = append(knowledge, "契約の ID の一覧（これに触れる裁定は人へ回す。末尾の * は前方一致）："+strings.Join(e.Project.Contracts, "、"))
+		}
 	case "p3-prepare":
 		tmpl, err := fs.ReadFile(e.Builtins, "templates/catalog/uc.md")
 		if err != nil {

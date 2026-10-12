@@ -28,10 +28,13 @@ type State struct {
 	DevResult string            `json:"devResult,omitempty"` // 最後の P5 の result.json（P5後に渡す）
 	VerifyLog string            `json:"verifyLog,omitempty"` // 最後の検証の出力（P5後に渡す）
 	Commit    string            `json:"commit,omitempty"`    // 最後のコミット
-	Status    string            `json:"status"`              // gateflow が最後に書いたステータス（手での書き換えの検出用）
-	Stopped   *Stop             `json:"stopped,omitempty"`
-	Resume    string            `json:"resume,omitempty"`  // 再開の位置（次に実行する step）
-	Resumed   bool              `json:"resumed,omitempty"` // resume で続けた後か
+	Review    string            `json:"review,omitempty"`    // 最後の P2 の result.json（ARB に渡す。M2.6）
+	// ArbDecided は、直前の ARB が裁定した指摘の指紋。次の P2 で同じ指摘が残ったら、ARB に裁定させず人へ回す（M2.6）
+	ArbDecided []string `json:"arbDecided,omitempty"`
+	Status     string   `json:"status"` // gateflow が最後に書いたステータス（手での書き換えの検出用）
+	Stopped    *Stop    `json:"stopped,omitempty"`
+	Resume     string   `json:"resume,omitempty"`  // 再開の位置（次に実行する step）
+	Resumed    bool     `json:"resumed,omitempty"` // resume で続けた後か
 }
 
 // Stop は、止まった理由。

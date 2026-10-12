@@ -33,6 +33,14 @@ func (e *Engine) doActions(ctx context.Context, st *State, step string, actions 
 			if err = e.Workspace.Import(ctx, e.Ticket.ID, e.Ticket.Branch); err == nil {
 				e.log("import", map[string]any{"branch": e.Ticket.Branch})
 			}
+		case "arb-answers":
+			err = e.arbAnswers()
+		case "arb-sections":
+			if e.lastARB.Section2 != "" {
+				err = e.Ticket.WriteSection2(e.lastARB.Section2)
+			}
+		case "arb-escalate":
+			err = e.arbEscalate()
 		case "findings-to-questions":
 			err = e.findingsToQuestions(step)
 		case "questions-from-output":
@@ -72,8 +80,11 @@ func (e *Engine) writeSections() error {
 func (e *Engine) commit(ctx context.Context, st *State, step string) error {
 	t := e.Ticket
 	msg := fmt.Sprintf("%s(%s): %s", commitType(t.Kind), t.ID, t.Title)
-	if step == "p3-prepare" {
+	switch step {
+	case "p3-prepare":
 		msg = fmt.Sprintf("docs(%s): %s（実装の準備）", t.ID, t.Title)
+	case "p2-arbitrate":
+		msg = e.arbCommitMessage()
 	}
 	if i := e.Project.Issue; i != nil && i.CommitRef != "" && t.IssueID() != "" {
 		msg += " " + i.Format(i.CommitRef, t.IssueID())
@@ -166,7 +177,8 @@ func (e *Engine) findingsToQuestions(step string) error {
 		qs = append(qs, q)
 	}
 	qs = append(qs, outputQuestions(r.Questions)...)
-	return e.Ticket.AppendQuestions(stepLabel(step), qs)
+	_, err := e.Ticket.AppendQuestions(stepLabel(step), qs)
+	return err
 }
 
 func (e *Engine) p3Questions() error {
@@ -178,7 +190,8 @@ func (e *Engine) p3Questions() error {
 	for _, u := range r.Unfilled {
 		qs = append(qs, ticketQuestion{Summary: summarize(u), Body: "値が決められない観点：" + u})
 	}
-	return e.Ticket.AppendQuestions(stepLabel("p3-prepare"), qs)
+	_, err := e.Ticket.AppendQuestions(stepLabel("p3-prepare"), qs)
+	return err
 }
 
 type ticketQuestion = ticket.NewQuestion

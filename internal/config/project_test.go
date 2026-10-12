@@ -206,3 +206,16 @@ func TestLoadProject_LimitsAndIssue(t *testing.T) {
 		t.Errorf("Format = %q", got)
 	}
 }
+
+// 契約の ID の一覧は、完全一致と、末尾の * による前方一致。ARB の往復の上限の初期値は 2。
+func TestProject_ContractsAndArbitrateLimit(t *testing.T) {
+	p := &config.Project{Contracts: []string{"NFR-06", "SCR-*"}}
+	for id, want := range map[string]bool{"NFR-06": true, "NFR-061": false, "SCR-18": true, "VAR-18": false} {
+		if got := p.IsContract(id); got != want {
+			t.Errorf("IsContract(%s) = %v", id, got)
+		}
+	}
+	if l := p.EffectiveLimits(); l.ArbitrateLoops != 2 {
+		t.Errorf("ArbitrateLoops = %d", l.ArbitrateLoops)
+	}
+}

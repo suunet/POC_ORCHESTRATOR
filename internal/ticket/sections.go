@@ -79,6 +79,32 @@ func cell(s string) string {
 }
 
 // replaceSection は、見出し head の節の中身を content に替える。
+// headRequirements は、§2（要求）の見出し。
+const headRequirements = "## §2"
+
+// WriteSection2 は、§2（要求）の本文を置き換える（ARB の裁定の反映。M2.6）。見出しの行は変えない。
+// 本文に見出し（# で始まる行）があると、節の区切りが崩れるので受け付けない。
+func (t *Ticket) WriteSection2(text string) error {
+	for _, l := range strings.Split(text, "\n") {
+		if strings.HasPrefix(l, "#") {
+			return fmt.Errorf("§2 の本文に見出しの行がある：%q", l)
+		}
+	}
+	data, err := os.ReadFile(t.Path)
+	if err != nil {
+		return err
+	}
+	body, ok := replaceSection(string(data), headRequirements, strings.TrimSpace(text)+"\n")
+	if !ok {
+		return fmt.Errorf("指示書 %s に節 %s がない", t.ID, headRequirements)
+	}
+	if err := writeFileAtomic(t.Path, []byte(body)); err != nil {
+		return err
+	}
+	t.Body = body
+	return nil
+}
+
 func replaceSection(body, head, content string) (string, bool) {
 	lines := strings.Split(body, "\n")
 	start := -1

@@ -75,53 +75,100 @@ mkdir -p "$d/cache"
 cat > /tmp/main.bundle
 rm -rf "$d/main"
 git clone -q --branch "$MAIN" /tmp/main.bundle "$d/main"
-if [ -d "$d/repo/.git" ]; then
-  cd "$d/repo"
-  st=clean
-  [ -z "$(git status --porcelain)" ] || st=dirty
-  git fetch -q /tmp/main.bundle "+refs/heads/$MAIN:refs/gateflow/main"
-  m=$(git rev-parse refs/gateflow/main)
-  h=$(git rev-parse HEAD)
-  if git merge-base --is-ancestor "$m" "$h"; then
-    mode=current
-  elif [ "$st" = clean ] && git merge-base --is-ancestor "$h" "$m"; then
-    git -c core.hooksPath=/dev/null merge -q --ff-only "$m"
-    mode=forwarded
-  else
-    mode=behind
-  fi
-  echo "exists $(git rev-parse HEAD) $st $m $mode"
-else
+g() { git -c core.hooksPath=/dev/null "$@"; }
+created=0
+if [ ! -d "$d/repo/.git" ]; then
   git clone -q --branch "$MAIN" /tmp/main.bundle "$d/repo"
   cd "$d/repo"
   git remote remove origin
   printf '.env\n' >> .git/info/exclude
-  git switch -q -c "$BRANCH"
-  echo "created $(git rev-parse HEAD)"
+  if [ "$HOSTBRANCH" = 1 ]; then
+    git fetch -q /tmp/main.bundle "refs/heads/$BRANCH:refs/heads/$BRANCH"
+    git switch -q "$BRANCH"
+  else
+    git switch -q -c "$BRANCH"
+  fi
+  created=1
 fi
+cd "$d/repo"
+st=clean
+[ -z "$(git status --porcelain)" ] || st=dirty
+h0=$(git rev-parse HEAD)
+git fetch -q /tmp/main.bundle "+refs/heads/$MAIN:refs/gateflow/main"
+synced=0
+if [ "$HOSTBRANCH" = 1 ] && [ "$created" = 0 ]; then
+  git fetch -q /tmp/main.bundle "+refs/heads/$BRANCH:refs/gateflow/branch"
+  b=$(git rev-parse refs/gateflow/branch)
+  if [ "$st" = clean ] && [ "$h0" != "$b" ] && git merge-base --is-ancestor "$h0" "$b"; then
+    g merge -q --ff-only "$b"
+    synced=1
+  fi
+fi
+m=$(git rev-parse refs/gateflow/main)
+h=$(git rev-parse HEAD)
+if git merge-base --is-ancestor "$m" "$h"; then
+  mode=current
+elif [ "$st" = clean ] && git merge-base --is-ancestor "$h" "$m"; then
+  g merge -q --ff-only "$m"
+  mode=forwarded
+elif [ "$st" = clean ] && [ "$MERGEMAIN" = 1 ]; then
+  if g merge -q --no-ff --no-edit -m "merge: $MAIN を $BRANCH へマージする（gateflow）" "$m" >/dev/null 2>&1; then
+    mode=merged
+  else
+    g merge --abort >/dev/null 2>&1 || true
+    mode=conflict
+  fi
+else
+  mode=behind
+fi
+kind=exists
+[ "$created" = 1 ] && kind=created
+echo "$kind $h0 $(git rev-parse HEAD) $st $m $mode $synced"
 `
 
 // Prepared は、clone の用意の結果。Main は使った main のハッシュ、Head は用意した後の作業ブランチの先頭。
 // Forwarded は、作業ブランチを新しい main へ早送りしたこと。Behind は、作業ブランチに自分のコミットがあり、
-// main の進みを取り込んでいないこと（Q-23：触らずに警告する）。
+// main の進みを取り込んでいないこと（Q-23：触らずに警告する）。Merged は、main を作業ブランチへマージしたこと
+// （M2.6 の Q-01。新しいコミットができるので、呼び出し側がプロジェクトへ取り込む）。Synced は、プロジェクトの
+// 作業ブランチ（人の決定のコミット）へ早送りしたこと。
 type Prepared struct {
 	Main      string
 	Head      string
 	Forwarded bool
 	Behind    bool
+	Merged    bool
+	Synced    bool
+}
+
+// PrepareOptions は、clone の用意の選び方。MergeMain は、作業ブランチに自分のコミットがあっても、main の進みを
+// マージする（P2 の段階。M2.6 の Q-01）。Author は、マージのコミットの名義。
+type PrepareOptions struct {
+	MergeMain bool
+	Author    Author
 }
 
 // Prepare は、チケットの clone を用意する。clone がなければ main から作り、あれば使い回す。
 // 使い回すときに取り込まれていない変更があれば止める。作業ブランチに自分のコミットがなく、作業ツリーがきれいなら、
 // 新しい main へ早送りする（Q-23）。deps があれば、main の写しに対して依存を取得する。
-func (w *Workspace) Prepare(ctx context.Context, ticketID, branch, mainBranch string, deps *config.Deps) (Prepared, error) {
-	bundle, err := w.bundleMain(ctx, mainBranch)
+func (w *Workspace) Prepare(ctx context.Context, ticketID, branch, mainBranch string, deps *config.Deps, opt PrepareOptions) (Prepared, error) {
+	bundle, hostBranch, err := w.bundleMain(ctx, mainBranch, branch)
 	if err != nil {
 		return Prepared{}, err
 	}
+	if opt.MergeMain && (opt.Author.Name == "" || opt.Author.Email == "") {
+		return Prepared{}, errors.New("マージのコミットの名義（人の git の設定の user.name と user.email）がない")
+	}
+	env := map[string]string{"TICKET": ticketID, "BRANCH": branch, "MAIN": mainBranch, "HOSTBRANCH": "0", "MERGEMAIN": "0",
+		"GIT_AUTHOR_NAME": opt.Author.Name, "GIT_AUTHOR_EMAIL": opt.Author.Email,
+		"GIT_COMMITTER_NAME": opt.Author.Name, "GIT_COMMITTER_EMAIL": opt.Author.Email}
+	if hostBranch {
+		env["HOSTBRANCH"] = "1"
+	}
+	if opt.MergeMain {
+		env["MERGEMAIN"] = "1"
+	}
 	var out bytes.Buffer
-	spec := w.spec(ticketID, "clone", []container.Mount{{Type: container.Volume, Source: w.Volume(), Target: "/vol"}},
-		map[string]string{"TICKET": ticketID, "BRANCH": branch, "MAIN": mainBranch}, cloneScript)
+	spec := w.spec(ticketID, "clone", []container.Mount{{Type: container.Volume, Source: w.Volume(), Target: "/vol"}}, env, cloneScript)
 	spec.Stdin = bytes.NewReader(bundle)
 	if err := w.run(ctx, spec, &out); err != nil {
 		return Prepared{}, fmt.Errorf("clone を用意できない: %w", err)
@@ -155,25 +202,24 @@ func (w *Workspace) Prepare(ctx context.Context, ticketID, branch, mainBranch st
 
 func (w *Workspace) checkClone(ctx context.Context, ticketID, line string) (Prepared, error) {
 	f := strings.Fields(line)
-	switch {
-	case len(f) == 2 && f[0] == "created":
-		return Prepared{Main: f[1], Head: f[1]}, nil
-	case len(f) == 5 && f[0] == "exists":
-		if f[2] != "clean" {
-			return Prepared{}, fmt.Errorf("%s の clone に、取り込まれていない変更（コミットしていない変更）がある。確かめてから clone を消すか取り込む", ticketID)
-		}
-		if _, err := w.git(ctx, "cat-file", "-e", f[1]+"^{commit}"); err != nil {
-			return Prepared{}, fmt.Errorf("%s の clone に、プロジェクトに取り込まれていないコミット %s がある。確かめてから clone を消すか取り込む", ticketID, f[1])
-		}
-		switch f[4] {
-		case "current", "forwarded", "behind":
-		default:
-			return Prepared{}, fmt.Errorf("clone の用意の出力を読めない: %q", line)
-		}
-		return Prepared{Main: f[3], Head: f[1], Forwarded: f[4] == "forwarded", Behind: f[4] == "behind"}, nil
+	if len(f) != 7 || (f[0] != "created" && f[0] != "exists") {
+		return Prepared{}, fmt.Errorf("clone の用意の出力を読めない: %q", line)
+	}
+	h0, head, state, main, mode, synced := f[1], f[2], f[3], f[4], f[5], f[6]
+	if state != "clean" {
+		return Prepared{}, fmt.Errorf("%s の clone に、取り込まれていない変更（コミットしていない変更）がある。確かめてから clone を消すか取り込む", ticketID)
+	}
+	if _, err := w.git(ctx, "cat-file", "-e", h0+"^{commit}"); err != nil {
+		return Prepared{}, fmt.Errorf("%s の clone に、プロジェクトに取り込まれていないコミット %s がある。確かめてから clone を消すか取り込む", ticketID, h0)
+	}
+	switch mode {
+	case "current", "forwarded", "behind", "merged":
+	case "conflict":
+		return Prepared{}, fmt.Errorf("%s の作業ブランチへ main（%.7s）をマージできない（衝突）。人が作業ブランチで解消してから run する", ticketID, main)
 	default:
 		return Prepared{}, fmt.Errorf("clone の用意の出力を読めない: %q", line)
 	}
+	return Prepared{Main: main, Head: head, Forwarded: mode == "forwarded", Behind: mode == "behind", Merged: mode == "merged", Synced: synced == "1"}, nil
 }
 
 // AgentMounts は、エージェントのコンテナのマウントを返す。.git と依存のキャッシュは読み取り専用。
@@ -271,20 +317,28 @@ func (w *Workspace) Import(ctx context.Context, ticketID, branch string) error {
 	return nil
 }
 
-func (w *Workspace) bundleMain(ctx context.Context, mainBranch string) ([]byte, error) {
+// bundleMain は、main と、プロジェクトに作業ブランチがあればそれも束ねる（人の決定のコミットを clone へ渡す。M2.6 の Q-01）。
+func (w *Workspace) bundleMain(ctx context.Context, mainBranch, branch string) ([]byte, bool, error) {
 	if _, err := w.git(ctx, "rev-parse", "--verify", "--quiet", "refs/heads/"+mainBranch); err != nil {
-		return nil, fmt.Errorf("プロジェクトに %s のブランチがない", mainBranch)
+		return nil, false, fmt.Errorf("プロジェクトに %s のブランチがない", mainBranch)
+	}
+	refs := []string{"refs/heads/" + mainBranch}
+	_, err := w.git(ctx, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
+	hostBranch := err == nil && branch != mainBranch
+	if hostBranch {
+		refs = append(refs, "refs/heads/"+branch)
 	}
 	dir, err := os.MkdirTemp("", "gateflow-")
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer os.RemoveAll(dir)
 	path := filepath.Join(dir, "main.bundle")
-	if _, err := w.git(ctx, "bundle", "create", "--quiet", path, "refs/heads/"+mainBranch); err != nil {
-		return nil, fmt.Errorf("%s を束ねられない: %w", mainBranch, err)
+	if _, err := w.git(ctx, append([]string{"bundle", "create", "--quiet", path}, refs...)...); err != nil {
+		return nil, false, fmt.Errorf("%s を束ねられない: %w", mainBranch, err)
 	}
-	return os.ReadFile(path)
+	data, err := os.ReadFile(path)
+	return data, hostBranch, err
 }
 
 func (w *Workspace) git(ctx context.Context, args ...string) ([]byte, error) {

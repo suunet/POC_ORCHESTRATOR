@@ -93,11 +93,11 @@ func mountFor(spec container.Spec, target string) (container.Mount, bool) {
 func TestPrepare_NewClone(t *testing.T) {
 	project := newRepo(t)
 	main := git(t, project, "rev-parse", "main")
-	r := &fakeRunner{replies: []reply{{stdout: []byte("created " + main + "\n")}, {}}}
+	r := &fakeRunner{replies: []reply{{stdout: []byte("created " + main + " " + main + " clean " + main + " current 0\n")}, {}}}
 	ws := newWorkspace(t, project, r)
 
 	deps := &config.Deps{Command: "go mod download", CacheEnv: "GOMODCACHE"}
-	if _, err := ws.Prepare(context.Background(), "T-001", "feature/t-001-x", "main", deps); err != nil {
+	if _, err := ws.Prepare(context.Background(), "T-001", "feature/t-001-x", "main", deps, workspace.PrepareOptions{}); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 	if len(r.specs) != 2 {
@@ -145,8 +145,8 @@ func TestPrepare_NewClone(t *testing.T) {
 func TestPrepare_NoDeps(t *testing.T) {
 	project := newRepo(t)
 	main := git(t, project, "rev-parse", "main")
-	r := &fakeRunner{replies: []reply{{stdout: []byte("created " + main + "\n")}}}
-	if _, err := newWorkspace(t, project, r).Prepare(context.Background(), "T-001", "feature/x", "main", nil); err != nil {
+	r := &fakeRunner{replies: []reply{{stdout: []byte("created " + main + " " + main + " clean " + main + " current 0\n")}}}
+	if _, err := newWorkspace(t, project, r).Prepare(context.Background(), "T-001", "feature/x", "main", nil, workspace.PrepareOptions{}); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 	if len(r.specs) != 1 {
@@ -156,33 +156,39 @@ func TestPrepare_NoDeps(t *testing.T) {
 
 func TestPrepare_NoMainBranch(t *testing.T) {
 	project := newRepo(t)
-	if _, err := newWorkspace(t, project, &fakeRunner{}).Prepare(context.Background(), "T-001", "feature/x", "develop", nil); err == nil {
+	if _, err := newWorkspace(t, project, &fakeRunner{}).Prepare(context.Background(), "T-001", "feature/x", "develop", nil, workspace.PrepareOptions{}); err == nil {
 		t.Fatal("main のブランチがないのに進んだ")
 	}
 }
 
 // clone がすでにあれば使い回す。ただし取り込まれていない変更があれば止める。
-// main の進みは、自分のコミットがなければ早送りし、あれば警告の印を返す（Q-23）。
+// main の進みは、自分のコミットがなければ早送りし、あれば警告の印を返す（Q-23）。P2 の段階ならマージする（M2.6 の Q-01）。
 func TestPrepare_ExistingClone(t *testing.T) {
 	project := newRepo(t)
 	main := git(t, project, "rev-parse", "main")
+	line := func(h0, head, st, mode, synced string) string {
+		return strings.Join([]string{"exists", h0, head, st, main, mode, synced}, " ") + "\n"
+	}
 	cases := []struct {
 		name    string
 		stdout  string
 		want    workspace.Prepared
 		wantErr string
 	}{
-		{"変更なし", "exists " + main + " clean " + main + " current\n", workspace.Prepared{Main: main, Head: main}, ""},
-		{"早送りした", "exists " + main + " clean " + main + " forwarded\n", workspace.Prepared{Main: main, Head: main, Forwarded: true}, ""},
-		{"main が進んだが自分のコミットがある", "exists " + main + " clean " + main + " behind\n", workspace.Prepared{Main: main, Head: main, Behind: true}, ""},
-		{"作業ツリーに変更がある", "exists " + main + " dirty " + main + " behind\n", workspace.Prepared{}, "取り込まれていない"},
-		{"取り込まれていないコミットがある", "exists 0123456789abcdef0123456789abcdef01234567 clean " + main + " current\n", workspace.Prepared{}, "取り込まれていない"},
-		{"出力の形が古い", "exists " + main + " clean\n", workspace.Prepared{}, "読めない"},
+		{"変更なし", line(main, main, "clean", "current", "0"), workspace.Prepared{Main: main, Head: main}, ""},
+		{"早送りした", line(main, main, "clean", "forwarded", "0"), workspace.Prepared{Main: main, Head: main, Forwarded: true}, ""},
+		{"main が進んだが自分のコミットがある", line(main, main, "clean", "behind", "0"), workspace.Prepared{Main: main, Head: main, Behind: true}, ""},
+		{"main をマージした", line(main, "abc1234", "clean", "merged", "0"), workspace.Prepared{Main: main, Head: "abc1234", Merged: true}, ""},
+		{"プロジェクトの作業ブランチへ早送りした", line(main, main, "clean", "current", "1"), workspace.Prepared{Main: main, Head: main, Synced: true}, ""},
+		{"マージが衝突した", line(main, main, "clean", "conflict", "0"), workspace.Prepared{}, "衝突"},
+		{"作業ツリーに変更がある", line(main, main, "dirty", "behind", "0"), workspace.Prepared{}, "取り込まれていない"},
+		{"取り込まれていないコミットがある", line("0123456789abcdef0123456789abcdef01234567", main, "clean", "current", "0"), workspace.Prepared{}, "取り込まれていない"},
+		{"出力の形が古い", "exists " + main + " clean " + main + " current\n", workspace.Prepared{}, "読めない"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &fakeRunner{replies: []reply{{stdout: []byte(tc.stdout)}}}
-			got, err := newWorkspace(t, project, r).Prepare(context.Background(), "T-001", "feature/x", "main", nil)
+			got, err := newWorkspace(t, project, r).Prepare(context.Background(), "T-001", "feature/x", "main", nil, workspace.PrepareOptions{})
 			if tc.wantErr == "" && err != nil {
 				t.Fatalf("Prepare: %v", err)
 			}
@@ -193,6 +199,15 @@ func TestPrepare_ExistingClone(t *testing.T) {
 				t.Errorf("got %+v, want %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+// main をマージするときは、マージのコミットの名義が要る。
+func TestPrepare_MergeMainNeedsAuthor(t *testing.T) {
+	project := newRepo(t)
+	_, err := newWorkspace(t, project, &fakeRunner{}).Prepare(context.Background(), "T-001", "feature/x", "main", nil, workspace.PrepareOptions{MergeMain: true})
+	if err == nil || !strings.Contains(err.Error(), "名義") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

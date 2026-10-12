@@ -59,10 +59,11 @@ type Route struct {
 
 // stepOutcomes は、エージェントの step ごとのあり得る outcome（出力の構造体の選択肢と同じ）。
 var stepOutcomes = map[string][]string{
-	"p2-review":  {"approved", "needs_fix"},
-	"p3-prepare": {"done", "needs_answer"},
-	"p5":         {"done", "test_defect", "blocked"},
-	"p5-verify":  {"approved", "needs_fix", "needs_human"},
+	"p2-review":    {"approved", "needs_fix"},
+	"p2-arbitrate": {"resolved", "escalated"},
+	"p3-prepare":   {"done", "needs_answer"},
+	"p5":           {"done", "test_defect", "blocked"},
+	"p5-verify":    {"approved", "needs_fix", "needs_human"},
 }
 
 // checkOutcomes は、機械の検査の step のあり得る outcome。
@@ -77,6 +78,7 @@ var KnownGuards = []string{"questions-resolved", "approval-checked", "branch-mer
 var KnownActions = []string{
 	"findings-to-questions", "questions-from-output", "write-sections",
 	"check-sections", "check-acceptance", "check-ids", "commit", "import",
+	"arb-answers", "arb-sections", "arb-escalate",
 }
 
 // Outcomes は、step のあり得る outcome を返す。
@@ -192,8 +194,8 @@ func (w *Workflow) validate() []error {
 		switch {
 		case st.Agent != "" && st.Check != "":
 			add("%s：agent と check の両方がある", where)
-		case st.Agent != "" && st.Agent != "dev" && st.Agent != "bj":
-			add("%s：担当 %q は dev か bj でない", where, st.Agent)
+		case st.Agent != "" && st.Agent != "dev" && st.Agent != "bj" && st.Agent != "arb":
+			add("%s：担当 %q は dev・bj・arb のどれでもない", where, st.Agent)
 		case st.Check != "" && checkOutcomes[st.Check] == nil:
 			add("%s：検査 %q は知らない", where, st.Check)
 		case st.Agent == "" && st.Check == "":

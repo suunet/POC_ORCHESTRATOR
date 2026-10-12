@@ -259,3 +259,15 @@ func TestRules_Matches(t *testing.T) {
 		}
 	}
 }
+
+// FindIDs は、文の中の ID を重ねずに返し、別の語の一部や形式に合わないものは拾わない。
+func TestRules_FindIDs(t *testing.T) {
+	rules, err := idcheck.NewRules(testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := rules.FindIDs("UC-001 と ACT-01（UC-001 の再掲）。XUC-002、UC-0012、SHA-256 は拾わない")
+	if strings.Join(got, ",") != "ACT-01,UC-001" && strings.Join(got, ",") != "UC-001,ACT-01" {
+		t.Errorf("FindIDs = %v", got)
+	}
+}

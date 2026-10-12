@@ -64,14 +64,19 @@ func FindingKeys(fs []output.Finding) []string {
 		if f.Label != "MUST" && f.Label != "Q" {
 			continue
 		}
-		var ev string
-		if e := f.Evidence; e != nil {
-			ev = fmt.Sprintf("%s:%d:%s", e.File, e.Line, e.ID)
-		}
-		keys = append(keys, f.Label+"|"+ev+"|"+hash(strings.Join(strings.Fields(f.Finding), "")))
+		keys = append(keys, findingKey(f))
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// findingKey は、指摘1件の指紋（ラベル、根拠、本文）。
+func findingKey(f output.Finding) string {
+	var ev string
+	if e := f.Evidence; e != nil {
+		ev = fmt.Sprintf("%s:%d:%s", e.File, e.Line, e.ID)
+	}
+	return f.Label + "|" + ev + "|" + hash(strings.Join(strings.Fields(f.Finding), ""))
 }
 
 // Overlaps は、前回の指摘の指紋のどれかが今回も残っているかを返す。

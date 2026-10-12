@@ -39,6 +39,23 @@ type Project struct {
 	Issue           *Issue   `json:"issue,omitempty"`
 	IDs             *IDs     `json:"ids"`
 	Policies        []Policy `json:"policies"`
+	// Contracts は、外から見える契約の ID（例：NFR-06、SCR-*。末尾の * は前方一致）。
+	// ARB の裁定がこれに触れたら、gateflow が人へ回させる（M2.6 の Q-05）。
+	Contracts []string `json:"contracts,omitempty"`
+}
+
+// IsContract は、id が契約の ID の一覧に当たるかを返す。
+func (p *Project) IsContract(id string) bool {
+	for _, c := range p.Contracts {
+		if prefix, ok := strings.CutSuffix(c, "*"); ok {
+			if strings.HasPrefix(id, prefix) {
+				return true
+			}
+		} else if id == c {
+			return true
+		}
+	}
+	return false
 }
 
 // Branch は、ブランチの設定。作業ブランチの名前は指示書の欄で決める。
@@ -74,10 +91,12 @@ type Limits struct {
 	Loops       int `json:"loops,omitempty"`       // ループの往復（種類ごと）
 	IdleMinutes int `json:"idleMinutes,omitempty"` // エージェントの無反応
 	RunMinutes  int `json:"runMinutes,omitempty"`  // エージェントの1回の実行時間
+	// ArbitrateLoops は、ARB の裁定から P2 へ戻る往復（M2.6）。超えたら、残りを人へ回す
+	ArbitrateLoops int `json:"arbitrateLoops,omitempty"`
 }
 
 // 上限の初期値（設計の「暴走防止と通知」）。
-var defaultLimits = Limits{Steps: 20, Loops: 3, IdleMinutes: 10, RunMinutes: 60}
+var defaultLimits = Limits{Steps: 20, Loops: 3, IdleMinutes: 10, RunMinutes: 60, ArbitrateLoops: 2}
 
 // EffectiveLimits は、設定の値と初期値を合わせた上限を返す。
 func (p *Project) EffectiveLimits() Limits {
@@ -89,6 +108,7 @@ func (p *Project) EffectiveLimits() Limits {
 		}{
 			{&l.Steps, p.Limits.Steps}, {&l.Loops, p.Limits.Loops},
 			{&l.IdleMinutes, p.Limits.IdleMinutes}, {&l.RunMinutes, p.Limits.RunMinutes},
+			{&l.ArbitrateLoops, p.Limits.ArbitrateLoops},
 		} {
 			if f.v > 0 {
 				*f.dst = f.v
@@ -244,13 +264,18 @@ func (p *Project) validate() []error {
 		for _, f := range []struct {
 			name string
 			v    int
-		}{{"steps", l.Steps}, {"loops", l.Loops}, {"idleMinutes", l.IdleMinutes}, {"runMinutes", l.RunMinutes}} {
+		}{{"steps", l.Steps}, {"loops", l.Loops}, {"idleMinutes", l.IdleMinutes}, {"runMinutes", l.RunMinutes}, {"arbitrateLoops", l.ArbitrateLoops}} {
 			if f.v < 0 {
 				errs = append(errs, fmt.Errorf("limits.%s %d は負の数", f.name, f.v))
 			}
 		}
-		if l.Steps == 0 && l.Loops == 0 && l.IdleMinutes == 0 && l.RunMinutes == 0 {
+		if l.Steps == 0 && l.Loops == 0 && l.IdleMinutes == 0 && l.RunMinutes == 0 && l.ArbitrateLoops == 0 {
 			errs = append(errs, errors.New("limits に値がない（limits.steps などを書くか、limits ごと消す）"))
+		}
+	}
+	for i, c := range p.Contracts {
+		if strings.TrimSuffix(c, "*") == "" {
+			errs = append(errs, fmt.Errorf("contracts[%d] が空", i))
 		}
 	}
 	if i := p.Issue; i != nil {

@@ -50,7 +50,7 @@ type Result struct {
 
 // Workspace は、タスクごとの clone の操作。
 type Workspace interface {
-	Prepare(ctx context.Context, ticketID, branch, mainBranch string, deps *config.Deps) (workspace.Prepared, error)
+	Prepare(ctx context.Context, ticketID, branch, mainBranch string, deps *config.Deps, opt workspace.PrepareOptions) (workspace.Prepared, error)
 	AgentMounts(ticketID string) []container.Mount
 	ReviewerMounts(ticketID string) []container.Mount
 	CommitHash(ctx context.Context, ticketID, message string, author workspace.Author) (string, bool, error)
@@ -58,6 +58,8 @@ type Workspace interface {
 	Export(ctx context.Context, ticketID, dest string) (string, error)
 	Diff(ctx context.Context, ticketID, base string) (string, error)
 	TreeHash(ctx context.Context, ticketID string) (string, error)
+	Snapshot(ctx context.Context, ticketID, dest string) error
+	Reset(ctx context.Context, ticketID string) error
 	Tracked(ctx context.Context, mainBranch, path string) bool
 }
 
@@ -102,6 +104,9 @@ type Engine struct {
 	lastVerify string          // 直前の検証の出力
 	warnings   []string        // 実行の中で見つけた、止めない警告
 	planned    map[string]bool // BJ の根拠に使われた、予定の ID（Q-24）
+	lastARB    *output.ARBResult
+	arbForced  []int    // 進展なしで人へ回す指摘の番号（M2.6）
+	arbQIDs    []string // ARB の裁定を書いた質疑の番号（コミットのメッセージに使う）
 	checks     int
 }
 
@@ -331,11 +336,22 @@ func (e *Engine) loopIn(ctx context.Context, run *ticket.Run, st *State, step st
 	if err := st.Save(run.Dir); err != nil {
 		return Result{}, err
 	}
-	prep, err := e.Workspace.Prepare(ctx, e.Ticket.ID, e.Ticket.Branch, e.Project.Branch.Main, e.Project.Deps)
+	// P2 の段階では、作業ブランチに自分のコミット（ARB と人の決定）があっても main の進みをマージする（M2.6 の Q-01）
+	mergeMain := slices.Contains([]string{string(ticket.Draft), string(ticket.ReadyToPrepare)}, st.Status)
+	prep, err := e.Workspace.Prepare(ctx, e.Ticket.ID, e.Ticket.Branch, e.Project.Branch.Main, e.Project.Deps,
+		workspace.PrepareOptions{MergeMain: mergeMain, Author: e.Author})
 	if err != nil {
 		return Result{}, err
 	}
-	e.log("workspace", map[string]any{"main": prep.Main, "head": prep.Head, "forwarded": prep.Forwarded, "behind": prep.Behind})
+	e.log("workspace", map[string]any{"main": prep.Main, "head": prep.Head, "forwarded": prep.Forwarded, "behind": prep.Behind,
+		"merged": prep.Merged, "synced": prep.Synced})
+	if prep.Merged {
+		// マージのコミットは clone にしかないので、プロジェクトの作業ブランチへ取り込む
+		if err := e.Workspace.Import(ctx, e.Ticket.ID, e.Ticket.Branch); err != nil {
+			return Result{}, err
+		}
+		e.log("import", map[string]any{"branch": e.Ticket.Branch, "reason": "merge-main"})
+	}
 	if prep.Behind {
 		e.warnings = append(e.warnings, fmt.Sprintf("main が進んでいる（%s）が、作業ブランチに自分のコミットがあるので取り込んでいない。作業ブランチは main の古い版の上にある", short(prep.Main)))
 	}
@@ -361,6 +377,20 @@ func (e *Engine) loopIn(ctx context.Context, run *ticket.Run, st *State, step st
 	for {
 		if st.Steps >= limits.Steps {
 			return stopped("limit-steps", fmt.Sprintf("step の数が上限（%d）に達した", limits.Steps), step)
+		}
+		if step == "p2-arbitrate" && st.Loops[arbitrateCounter] >= limits.ArbitrateLoops {
+			// ARB の往復が上限に達したら、ARB に裁定させず、BJ の指摘をそのまま人へ回す（M2.6）
+			if err := e.findingsToQuestions("p2-review"); err != nil {
+				return Result{}, err
+			}
+			if err := e.setStatus(st, string(ticket.Draft)); err != nil {
+				return Result{}, err
+			}
+			st.Stopped, st.Resume = nil, ""
+			st.Save(run.Dir)
+			e.log("arb-limit", map[string]any{"limit": limits.ArbitrateLoops})
+			return Result{Outcome: Gate, Message: fmt.Sprintf("ARB の往復が上限（%d）に達したので、BJ の指摘を人へ回した", limits.ArbitrateLoops),
+				Next: e.next(string(ticket.Draft))}, nil
 		}
 		st.Steps++
 		st.Step = step
@@ -409,8 +439,12 @@ func (e *Engine) loopIn(ctx context.Context, run *ticket.Run, st *State, step st
 			st.Loops[route.Counter]++
 			n := st.Loops[route.Counter]
 			e.log("loop", map[string]any{"counter": route.Counter, "count": n, "to": route.Loop})
-			if n > limits.Loops {
-				return stopped("limit-loops", fmt.Sprintf("%s の往復が上限（%d）を超えた", route.Counter, limits.Loops), route.Loop)
+			limit := limits.Loops
+			if route.Counter == arbitrateCounter {
+				limit = limits.ArbitrateLoops
+			}
+			if n > limit {
+				return stopped("limit-loops", fmt.Sprintf("%s の往復が上限（%d）を超えた", route.Counter, limit), route.Loop)
 			}
 			if reason := e.noProgress(st, route.Counter, dir); reason != "" {
 				return stopped("no-progress", reason, route.Loop)
@@ -444,6 +478,9 @@ func (e *Engine) loopIn(ctx context.Context, run *ticket.Run, st *State, step st
 
 // noProgress は、ループの往復で前回から進んでいなければ、その理由を返す（Q-08）。
 func (e *Engine) noProgress(st *State, counter, dir string) string {
+	if counter == arbitrateCounter {
+		return "" // ARB の往復の進展なしは、裁定した指摘が残ったら人へ回す形で扱う（p2-arbitrate の forced）
+	}
 	if counter == "review" {
 		prev := st.Findings
 		st.Findings = e.findings
@@ -463,6 +500,10 @@ func (e *Engine) noProgress(st *State, counter, dir string) string {
 }
 
 func (e *Engine) writeFeedback(st *State, dir, text string) {
+	if text == "" {
+		st.Feedback = "" // 差し戻しの内容がない戻り（ARB の裁定の後の P2 など）は、差し戻しとして渡さない
+		return
+	}
 	path := filepath.Join(dir, "feedback.md")
 	os.WriteFile(path, []byte(text), 0o644)
 	st.Feedback = path

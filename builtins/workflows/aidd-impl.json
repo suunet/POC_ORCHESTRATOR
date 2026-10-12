@@ -3,7 +3,7 @@
   "states": ["draft", "ready-to-prepare", "ready-to-approve", "ready-to-implement", "implementing", "ready-for-review", "done", "cancelled"],
   "terminal": ["done", "cancelled"],
   "human": [
-    {"command": "ready", "from": ["draft"], "to": "ready-to-prepare", "guards": ["questions-resolved"]},
+    {"command": "ready", "from": ["draft", "ready-to-approve"], "to": "ready-to-prepare", "guards": ["questions-resolved"]},
     {"command": "approve", "from": ["ready-to-approve"], "to": "ready-to-implement", "guards": ["approval-checked"]},
     {"command": "done", "from": ["ready-for-review"], "to": "done", "guards": ["branch-merged"]},
     {"command": "cancel", "from": ["draft", "ready-to-prepare", "ready-to-approve", "ready-to-implement", "implementing"], "to": "cancelled"}
@@ -15,7 +15,11 @@
   "steps": {
     "p2-review": {"agent": "bj", "on": {
       "approved": {"next": "p3-prepare"},
-      "needs_fix": {"actions": ["findings-to-questions"], "to": "draft"}
+      "needs_fix": {"next": "p2-arbitrate"}
+    }},
+    "p2-arbitrate": {"agent": "arb", "on": {
+      "resolved": {"actions": ["arb-answers", "arb-sections", "commit", "import"], "loop": "p2-review", "counter": "arbitrate"},
+      "escalated": {"actions": ["arb-answers", "arb-sections", "commit", "import", "arb-escalate"], "to": "draft"}
     }},
     "p3-prepare": {"agent": "dev", "on": {
       "done": {"actions": ["write-sections", "check-sections", "commit", "check-acceptance", "check-ids", "import"], "to": "ready-to-approve"},
