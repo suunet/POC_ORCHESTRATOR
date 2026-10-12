@@ -192,7 +192,7 @@ AIはCLIの非対話実行で呼び出し、Claude CodeとCursorのどちらを�
 
 **UATシート。** `gateflow uat`の実行時に、受入条件と画面の観点から生成する。既定はBacklogに貼れるMarkdown（見出しと箇条書き）。検証環境が複数のプロジェクトだけ、環境ごとの結果の列を持つCSVも出す。結果は`未実施`・`OK`・`NG`・`保留`・`対象外`の5つ。取り込み時に、未実施が残っていないか、存在しないIDがないか、NG・保留にコメントがあるかを検査する。
 
-**AIの出力。** 各stepは`/out/result.json`に結果を書く。共通の項目は`outcome`（stepごとの選択肢）、`summary`、`questions`（空でなければ質疑に登録）、`notes`。BJの指摘は`label`・`finding`・`evidence`（必須。ファイル・行・IDのいずれか）・`suggestion`を持ち、gateflowが根拠の実在と、ラベルと`outcome`の整合を検査する。出力の形はGoの構造体で定義し、標準機能だけで検証する。AIに渡す出力形式の説明は構造体から生成する。
+**AIの出力。** 各stepは`/out/result.json`に結果を書く。共通の項目は`outcome`（stepごとの選択肢）、`summary`、`questions`（空でなければ質疑に登録）、`notes`。BJの指摘は`label`・`finding`・`evidence`（必須。ファイル・行・IDのいずれか）・`suggestion`を持ち、gateflowが根拠の実在と、ラベルと`outcome`の整合を検査する。根拠のIDは、カタログに定義があるか、指示書の対象IDに挙げた予定のID（`project.json`のIDの形式に合うもの）に限る。予定のIDは記録とレビュー報告に「予定」と残し、P5後に実在を確かめ、なければP5へ差し戻す。出力の形はGoの構造体で定義し、標準機能だけで検証する。AIに渡す出力形式の説明は構造体から生成する。
 
 | step | 担当 | `outcome`の選択肢 | 固有の項目 |
 | --- | --- | --- | --- |
