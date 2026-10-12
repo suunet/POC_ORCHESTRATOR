@@ -449,11 +449,12 @@ func (e *Engine) arbReport(ctx context.Context) error {
 		return err
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "# %s ARB の裁定（承認の前の監査）\n\n質疑の決定者が ARB の行の一覧と、作業ブランチのカタログの差分（%s との比較、%s の下だけ）。反対なら、質疑の回答を書き直して決定者を人にし、gateflow ready で P2 からやり直す。\n\n## 裁定（%d 件）\n\n",
-		e.Ticket.ID, e.Project.Branch.Main, catalogDir, len(rows))
+	fmt.Fprintf(&b, "# %s 承認の前の監査\n\n作業ブランチのカタログの差分（%s との比較、%s の下だけ）", e.Ticket.ID, e.Project.Branch.Main, catalogDir)
+	// ARB の裁定がないとき（P2 の差し戻しを ARB へ回さない遷移表）は、裁定の節を出さない
 	if len(rows) == 0 {
-		b.WriteString("なし\n")
+		b.WriteString("。\n")
 	} else {
+		fmt.Fprintf(&b, "と、質疑の決定者が ARB の行の一覧。反対なら、質疑の回答を書き直して決定者を人にし、gateflow ready で P2 からやり直す。\n\n## 裁定（%d 件）\n\n", len(rows))
 		b.WriteString("| 質疑 | 要約 | 根拠 |\n| --- | --- | --- |\n")
 		for _, r := range rows {
 			fmt.Fprintf(&b, "| %s | %s | %s |\n", r.ID, r.Summary, r.Basis)

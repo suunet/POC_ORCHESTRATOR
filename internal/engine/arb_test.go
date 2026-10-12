@@ -121,6 +121,22 @@ func TestARB_ResolvedLoopsToP2(t *testing.T) {
 	}
 }
 
+// ARB を通らないとき（組み込みの遷移表）は、承認の前の報告に裁定の節を出さず、カタログの差分だけを書く。
+func TestARBReport_NoRulings(t *testing.T) {
+	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Approved}, "p3-prepare": {p3Done}})
+	res := mustRun(t, f)
+	if f.status(t) != ticket.ReadyToApprove {
+		t.Fatalf("res = %+v", res)
+	}
+	report, err := os.ReadFile(filepath.Join(res.RunDir, "arb-report.md"))
+	if err != nil || strings.Contains(string(report), "裁定") || !strings.Contains(string(report), "## カタログの差分") {
+		t.Errorf("arb-report.md（%v）:\n%s", err, report)
+	}
+	if !strings.Contains(res.Next, "カタログの差分（実行の記録の arb-report.md）") {
+		t.Errorf("次の操作 = %q", res.Next)
+	}
+}
+
 // 前の回に ARB が裁定したのに残った指摘は、ARB に裁定させず人へ回す（裁定したら出力の不正）。
 func TestARB_ForcedHumanWhenFindingRemains(t *testing.T) {
 	again := strings.Replace(arbResolved, `"outcome": "resolved"`, `"outcome": "resolved"`, 1)
