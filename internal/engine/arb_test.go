@@ -208,7 +208,7 @@ func TestARBTrial(t *testing.T) {
 	if !strings.Contains(in["/in/review.json"], "UC-001 の要求とログの項目") || in["/in/ticket.md"] == "" {
 		t.Errorf("入力 = %v", in)
 	}
-	for _, p := range []string{"latest", "20261012-090000/trial.json", "20261012-090000/prompt.md", "20261012-090000/work-1/.docs/design/buc.md"} {
+	for _, p := range []string{"trial.json", "prompt.md", "work-1/.docs/design/buc.md"} {
 		if _, err := os.Stat(filepath.Join(dest, p)); err != nil {
 			t.Errorf("%s がない", p)
 		}

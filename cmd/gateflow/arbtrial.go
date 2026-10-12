@@ -16,7 +16,8 @@ import (
 )
 
 // cmdARBTrial は、ARB の試験（M2.6）。チケットの過去の P2 の差し戻しの記録を入力に、ARB を本番と同じ形で動かし、
-// 結果を .docs/_stash/tickets/<T-NNN>/arb-trial/<日時>/ に置く。使い方には載せない（試験のための口）。
+// 結果を .docs/_stash/tickets/<T-NNN>/arb-trial/<試験の時刻>/<日時>/ に置く（前の試験は消さず、パスを使い回さない）。
+// 使い方には載せない（試験のための口）。
 //
 //	gateflow arb-trial <T-NNN> [<日時> ...] [--project <dir>]
 //
@@ -52,6 +53,7 @@ func cmdARBTrial(ctx context.Context, args []string, stdout, stderr io.Writer) i
 		return exitFailed
 	}
 	code := exitOK
+	batch := filepath.Join(filepath.Dir(tk.Path), "arb-trial", time.Now().UTC().Format("20060102-150405"))
 	for _, run := range runs {
 		src := p2StepDir(filepath.Join(runsDir, run))
 		if src == "" {
@@ -62,7 +64,7 @@ func cmdARBTrial(ctx context.Context, args []string, stdout, stderr io.Writer) i
 		e := &engine.Engine{Root: dir, Project: s.project, Personal: s.personal, Workflow: s.workflow, Ticket: tk,
 			AgentImage: image, Agent: s.agent, Workspace: ws, Egress: egress, Runner: s.docker,
 			Builtins: builtins.FS(), Rules: s.rules, Now: time.Now}
-		dest := filepath.Join(filepath.Dir(tk.Path), "arb-trial", run)
+		dest := filepath.Join(batch, run)
 		fmt.Fprintf(stdout, "%s：ARB を試しています…\n", run)
 		start := time.Now()
 		res, err := e.ARBTrial(ctx, src, dest)
