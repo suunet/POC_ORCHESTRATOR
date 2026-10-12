@@ -74,7 +74,20 @@ func Load(root, id string) (*Ticket, error) {
 	if err != nil {
 		return nil, fmt.Errorf("指示書を読めない: %w", err)
 	}
-	t := &Ticket{ID: id, Body: string(data), Path: path, root: root}
+	t, err := Parse(id, path, data)
+	if err != nil {
+		return nil, err
+	}
+	t.root = root
+	return t, nil
+}
+
+// Parse は、読み込み済みの指示書の中身を検査する。path は表示と記録の置き場所の計算にだけ使い、読まない。
+func Parse(id, path string, data []byte) (*Ticket, error) {
+	if !idPattern.MatchString(id) {
+		return nil, fmt.Errorf("チケットの ID %q は T-NNN の形でない", id)
+	}
+	t := &Ticket{ID: id, Body: string(data), Path: path}
 	if errs := t.parse(); len(errs) > 0 {
 		return nil, fmt.Errorf("指示書 %s の内容が正しくない:\n%w", path, errors.Join(errs...))
 	}

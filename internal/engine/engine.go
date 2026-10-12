@@ -168,26 +168,44 @@ func (e *Engine) Resume(ctx context.Context) (Result, error) {
 
 func (e *Engine) runsDir() string { return filepath.Join(filepath.Dir(e.Ticket.Path), "runs") }
 
+// DescribeTicket は、記録を読み込み済みの状態から、今の状態と人が次にすることを返す（ファイルを読まない）。
+// latest は最新の実行の記録の状態、last は最後のステータスの書き込み（なければ nil）。監視の UI で使う。
+func DescribeTicket(project *config.Project, wf *workflow.Workflow, t *ticket.Ticket, latest *State, last *Event) Result {
+	e := &Engine{Project: project, Workflow: wf, Ticket: t}
+	warnings := editWarnings(t, last)
+	if t.Held() {
+		return Result{Outcome: NothingToDo, Status: t.Status, Message: "保留", Next: "gateflow unhold " + t.ID, Warnings: warnings}
+	}
+	if _, ok := wf.AutoFrom(string(t.Status)); ok {
+		return Result{Outcome: Runnable, Status: t.Status, Message: "gateflow が次の手順を実行する", Next: "gateflow run " + t.ID, Warnings: warnings}
+	}
+	res := e.idleWith(latest)
+	res.Warnings = warnings
+	return res
+}
+
 // Describe は、実行せずに、今の状態と人が次にすることを返す（status で使う）。
 func (e *Engine) Describe() Result {
-	if e.Ticket.Held() {
-		return Result{Outcome: NothingToDo, Status: e.Ticket.Status, Message: "保留", Next: "gateflow unhold " + e.Ticket.ID, Warnings: e.manualEditWarnings()}
+	s, _, _ := LatestState(e.runsDir())
+	var last *Event
+	if ev, ok := LastEvent(e.Ticket); ok {
+		last = &ev
 	}
-	if _, ok := e.Workflow.AutoFrom(string(e.Ticket.Status)); ok {
-		return Result{Outcome: Runnable, Status: e.Ticket.Status, Message: "gateflow が次の手順を実行する", Next: "gateflow run " + e.Ticket.ID, Warnings: e.manualEditWarnings()}
-	}
-	res := e.idle()
-	res.Warnings = e.manualEditWarnings()
-	return res
+	return DescribeTicket(e.Project, e.Workflow, e.Ticket, s, last)
 }
 
 // idle は、自動で進められない状態のときの結果（関門で待っている、終わっている、止まっている）。
 func (e *Engine) idle() Result {
+	s, _, _ := LatestState(e.runsDir())
+	return e.idleWith(s)
+}
+
+func (e *Engine) idleWith(s *State) Result {
 	status := string(e.Ticket.Status)
 	if slices.Contains(e.Workflow.Terminal, status) {
 		return Result{Outcome: Finished, Status: e.Ticket.Status, Message: "流れの終わりに着いている", Next: e.next(status)}
 	}
-	if s, _, err := LatestState(e.runsDir()); err == nil && s.Stopped != nil && !s.Resumed && s.Status == status {
+	if s != nil && s.Stopped != nil && !s.Resumed && s.Status == status {
 		return Result{Outcome: Stopped, Status: e.Ticket.Status, Reason: s.Stopped.Reason, Message: s.Stopped.Detail,
 			Next: "原因を直してから gateflow resume " + e.Ticket.ID}
 	}
@@ -229,6 +247,12 @@ func (e *Engine) loop(ctx context.Context, st *State, step string) (Result, erro
 		return Result{}, err
 	}
 	e.run = run
+	// 実行の間だけ印を置く（監視の UI が実行中と中断を見分ける）。取り消し（SIGINT・SIGTERM）で終わるときも消す
+	unmark, err := run.MarkRunning(e.Now())
+	if err != nil {
+		e.log("running-mark-error", map[string]any{"error": err.Error()})
+	}
+	defer unmark()
 	res, err := e.loopIn(ctx, run, st, step)
 	res.Warnings = append(res.Warnings, e.warnings...)
 	res.RunDir = run.Dir
@@ -297,6 +321,7 @@ func (e *Engine) loopIn(ctx context.Context, run *ticket.Run, st *State, step st
 		if err != nil {
 			return Result{}, err
 		}
+		e.log("step-start", map[string]any{"step": step, "n": st.Steps})
 		begin := e.Now()
 		outcome, err := e.execStep(ctx, st, step, dir)
 		e.log("step-end", map[string]any{"step": step, "outcome": outcome, "seconds": e.Now().Sub(begin).Seconds()})
@@ -406,11 +431,17 @@ func (e *Engine) setStatus(st *State, to string) error {
 
 // manualEditWarnings は、gateflow が最後に書いたステータスと指示書のステータスが違えば警告を返す（止めない）。
 func (e *Engine) manualEditWarnings() []string {
-	last, ok := LastEvent(e.Ticket)
-	if !ok || last.To == string(e.Ticket.Status) {
+	if ev, ok := LastEvent(e.Ticket); ok {
+		return editWarnings(e.Ticket, &ev)
+	}
+	return nil
+}
+
+func editWarnings(t *ticket.Ticket, last *Event) []string {
+	if last == nil || last.To == string(t.Status) {
 		return nil
 	}
-	return []string{fmt.Sprintf("指示書のステータスが手で書き換えられている（gateflow が最後に書いたのは %s、今は %s）", last.To, e.Ticket.Status)}
+	return []string{fmt.Sprintf("指示書のステータスが手で書き換えられている（gateflow が最後に書いたのは %s、今は %s）", last.To, t.Status)}
 }
 
 func (e *Engine) log(event string, fields map[string]any) {

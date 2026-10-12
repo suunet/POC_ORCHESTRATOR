@@ -40,6 +40,11 @@ func (t *Ticket) UnresolvedQuestions() (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	return CountUnresolved(data), nil
+}
+
+// CountUnresolved は、質疑のファイルの中身から、一覧の表の状態が「確定」でない質疑の数を返す。
+func CountUnresolved(data []byte) int {
 	statusCol := -1
 	n := 0
 	for _, l := range strings.Split(string(data), "\n") {
@@ -59,7 +64,7 @@ func (t *Ticket) UnresolvedQuestions() (int, error) {
 			n++
 		}
 	}
-	return n, nil
+	return n
 }
 
 // AppendQuestions は、qs を未回答の質疑として足す。番号は続きから振り、人の書いた行は変えない。

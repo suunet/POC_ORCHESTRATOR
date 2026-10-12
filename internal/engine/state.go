@@ -64,9 +64,14 @@ func LoadState(dir string) (*State, error) {
 	if err != nil {
 		return nil, err
 	}
+	return DecodeState(data)
+}
+
+// DecodeState は、state.json の中身を読む。
+func DecodeState(data []byte) (*State, error) {
 	var s State
 	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, fmt.Errorf("%s の形式が正しくない: %w", filepath.Join(dir, StateFile), err)
+		return nil, fmt.Errorf("%s の形式が正しくない: %w", StateFile, err)
 	}
 	if s.Loops == nil {
 		s.Loops = map[string]int{}

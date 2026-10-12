@@ -168,6 +168,7 @@ func (e *Engine) agentStep(ctx context.Context, st *State, step, role, dir strin
 	for attempt := 1; attempt <= 1+outputRetries; attempt++ {
 		os.Remove(filepath.Join(outDir, "result.json"))
 		spec.Stdin = strings.NewReader(stdin)
+		e.log("agent-start", map[string]any{"step": step, "attempt": attempt})
 		code, err := e.runLogged(ctx, spec, dir, fmt.Sprintf("agent-%d", attempt))
 		e.log("agent-end", map[string]any{"step": step, "attempt": attempt, "exitCode": code})
 		if errors.Is(err, container.ErrTimeout) || errors.Is(err, container.ErrIdleTimeout) {
