@@ -135,7 +135,7 @@ function renderRunning(list) {
     if (!r.tools.length) tools.append(el("li", { class: "empty" }, "まだない"));
     const denied = el("ul");
     for (const d of r.denied) denied.append(el("li", { class: "alert" }, d.host + "：" + d.count + " 件"));
-    if (!r.denied.length) denied.append(el("li", { class: "empty" }, "なし（記録は実行の終わりに書かれる）"));
+    if (!r.denied.length) denied.append(el("li", { class: "empty" }, "なし"));
     box.append(el("div", { class: "card" }, head,
       el("div", { class: "cols" },
         el("div", {}, el("h3", {}, "直近のイベント（新しい順）"), events),

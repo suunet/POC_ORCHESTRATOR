@@ -392,10 +392,10 @@ func summarize(e map[string]any) Event {
 	return ev
 }
 
-// denied は、proxy.log の拒否をホストごとに数える（proxy.log は実行の終わりに書かれる）。
+// denied は、proxy.log の拒否をホストごとに数える（proxy.log は実行の間に逐次書かれる）。
 func denied(fsys fs.FS, runDir string) []Denied {
 	out := []Denied{}
-	data, err := fs.ReadFile(fsys, path.Join(runDir, "proxy.log"))
+	data, err := fs.ReadFile(fsys, path.Join(runDir, engine.ProxyLogFile))
 	if err != nil {
 		return out
 	}

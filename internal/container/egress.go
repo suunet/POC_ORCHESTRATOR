@@ -3,6 +3,7 @@ package container
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -50,6 +51,11 @@ func (e Egress) Start(ctx context.Context, allow []string) (string, error) {
 		return "", fmt.Errorf("プロキシを内部ネットワークにつなげない: %w", err)
 	}
 	return "http://" + ProxyAlias + ":" + proxyPort, nil
+}
+
+// Follow は、プロキシの判定の記録を、プロキシが消えるか ctx が取り消されるまで w へ逐次書く（実行中の記録のため）。
+func (e Egress) Follow(ctx context.Context, w io.Writer) error {
+	return e.Docker.Stream(ctx, w, "logs", "--follow", e.proxyName())
 }
 
 // Stop は、プロキシの判定の記録を取り出してから、プロキシを消す。

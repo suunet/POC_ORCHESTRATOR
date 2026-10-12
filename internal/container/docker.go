@@ -123,6 +123,16 @@ func (d Docker) Exec(ctx context.Context, args ...string) ([]byte, error) {
 	return out, nil
 }
 
+// Stream は、docker のコマンドを実行し、出力（標準出力と標準エラー）を終わるまで w へ逐次書く。
+func (d Docker) Stream(ctx context.Context, w io.Writer, args ...string) error {
+	cmd := d.Command(ctx, d.Bin, args...)
+	cmd.Stdout, cmd.Stderr = w, w
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker %s: %w", args[0], err)
+	}
+	return nil
+}
+
 // Run は、spec のコンテナを起動して終わるまで待ち、終了コードを返す。
 // 時間の上限に達したら、コンテナを消して ErrTimeout か ErrIdleTimeout を返す。
 func (d Docker) Run(ctx context.Context, spec Spec, stdout, stderr io.Writer) (int, error) {

@@ -722,7 +722,19 @@ func TestHuman(t *testing.T) {
 	}
 }
 
-type fakeEgress struct{ started, stopped bool }
+// fakeEgress は、追跡で判定を1行書いて終わる。followErr があれば、追跡は何も書かずに失敗する。
+type fakeEgress struct {
+	started, stopped bool
+	followErr        error
+}
+
+func (e *fakeEgress) Follow(_ context.Context, w io.Writer) error {
+	if e.followErr != nil {
+		return e.followErr
+	}
+	_, err := io.WriteString(w, "{\"decision\":\"deny\",\"target\":\"followed.example:443\"}\n")
+	return err
+}
 
 func (e *fakeEgress) Start(context.Context, []string) (string, error) {
 	e.started = true

@@ -89,6 +89,10 @@ func TestHelperProcess(t *testing.T) {
 		if mode == "detached-no-network" && len(args) > 1 && args[0] == "network" && args[1] == "inspect" {
 			os.Exit(1)
 		}
+		if mode == "follow" && args[0] == "logs" {
+			fmt.Println(`{"decision":"deny","target":"example.com:443"}`)
+			fmt.Fprintln(os.Stderr, "stderr の行")
+		}
 		os.Exit(0)
 	}
 	switch mode {

@@ -12,6 +12,9 @@ import (
 // StateFile は、実行の記録の中の、実行中の状態のファイル名。
 const StateFile = "state.json"
 
+// ProxyLogFile は、実行の記録の中の、プロキシの判定の記録のファイル名。実行の間に逐次書く。
+const ProxyLogFile = "proxy.log"
+
 // State は、実行中の状態（状態の2層管理の下の層）。書くのは gateflow だけ。
 type State struct {
 	Ticket    string            `json:"ticket"`

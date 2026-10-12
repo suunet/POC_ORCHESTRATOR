@@ -1,6 +1,7 @@
 package container_test
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"strings"
@@ -65,5 +66,22 @@ func TestEgress_ProxySpec(t *testing.T) {
 	}
 	if strings.Contains(got, "--rm") {
 		t.Errorf("プロキシは記録を取り出してから消すので --rm を付けない: %s", got)
+	}
+}
+
+// Follow は、プロキシの判定の記録を docker logs --follow で逐次 w へ書く（標準出力と標準エラーの両方）。
+func TestEgress_Follow(t *testing.T) {
+	d, logFile := fakeDocker(t, "follow")
+	e := container.Egress{Docker: d, Project: "sample", ProxyImage: "gateflow-proxy:v1"}
+	var buf bytes.Buffer
+	if err := e.Follow(context.Background(), &buf); err != nil {
+		t.Fatalf("Follow: %v", err)
+	}
+	if !strings.Contains(buf.String(), `"decision":"deny"`) || !strings.Contains(buf.String(), "stderr の行") {
+		t.Errorf("書いた内容 = %q", buf.String())
+	}
+	data, _ := os.ReadFile(logFile)
+	if !strings.Contains(string(data), "logs --follow gateflow-sample-proxy") {
+		t.Errorf("docker の呼び出し:\n%s", data)
 	}
 }

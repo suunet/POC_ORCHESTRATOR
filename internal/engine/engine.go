@@ -64,6 +64,7 @@ type Workspace interface {
 // Egress は、内部ネットワークと許可リストのプロキシ。
 type Egress interface {
 	Start(ctx context.Context, allow []string) (string, error)
+	Follow(ctx context.Context, w io.Writer) error
 	Stop(ctx context.Context) ([]byte, error)
 	Network() string
 }
@@ -108,6 +109,60 @@ type Engine struct {
 type errStop struct{ reason, detail string }
 
 func (e *errStop) Error() string { return e.reason + ": " + e.detail }
+
+// followProxy は、プロキシの判定を実行の記録の proxy.log へ逐次書き始め、プロキシを止めて書き終える関数を返す。
+// 逐次の書き込みが1行も書けなかったときは、止めるときに取り出した記録を書く。
+func (e *Engine) followProxy(ctx context.Context, runDir string) func() {
+	f, err := os.OpenFile(filepath.Join(runDir, ProxyLogFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		e.log("proxy-follow-error", map[string]any{"error": err.Error()})
+	}
+	w := &countWriter{w: f}
+	followCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	done := make(chan error, 1)
+	if f != nil {
+		go func() { done <- e.Egress.Follow(followCtx, w) }()
+	} else {
+		done <- nil
+	}
+	return func() {
+		logs, stopErr := e.Egress.Stop(context.WithoutCancel(ctx))
+		var followErr error
+		timedOut := false
+		select {
+		case followErr = <-done: // プロキシが消えると、記録の追跡も終わる
+		case <-time.After(5 * time.Second):
+			timedOut = true
+			cancel()
+			followErr = <-done
+		}
+		cancel()
+		if f != nil {
+			if w.n == 0 && len(logs) > 0 {
+				f.Write(logs)
+			}
+			f.Close()
+		}
+		if followErr != nil && !timedOut {
+			e.log("proxy-follow-error", map[string]any{"error": followErr.Error()})
+		}
+		if stopErr != nil {
+			e.log("proxy-stop-error", map[string]any{"error": stopErr.Error()})
+		}
+	}
+}
+
+// countWriter は、書いたバイト数を数える。
+type countWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
+}
 
 // short は、コミットのハッシュの先頭7文字を返す（表示用）。
 func short(hash string) string {
@@ -291,13 +346,8 @@ func (e *Engine) loopIn(ctx context.Context, run *ticket.Run, st *State, step st
 		return Result{}, err
 	}
 	e.proxyURL = proxyURL
-	defer func() {
-		logs, err := e.Egress.Stop(context.WithoutCancel(ctx))
-		os.WriteFile(filepath.Join(run.Dir, "proxy.log"), logs, 0o644)
-		if err != nil {
-			e.log("proxy-stop-error", map[string]any{"error": err.Error()})
-		}
-	}()
+	stopProxy := e.followProxy(ctx, run.Dir)
+	defer stopProxy()
 
 	stopped := func(reason, detail, resume string) (Result, error) {
 		st.Stopped = &Stop{Reason: reason, Detail: detail}
