@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -132,14 +131,16 @@ func (e *Engine) ARBTrial(ctx context.Context, src, dest string) (TrialResult, e
 		if err != nil {
 			return res, err
 		}
-		_, runErr := e.Runner.Run(ctx, spec, logFile, io.Discard)
+		var stderr strings.Builder
+		code, runErr := e.Runner.Run(ctx, spec, logFile, &stderr)
 		logFile.Close()
+		os.WriteFile(filepath.Join(dest, fmt.Sprintf("agent-%d.stderr", attempt)), []byte(stderr.String()), 0o644)
 		if runErr != nil {
 			return res, runErr
 		}
 		out, err := os.ReadFile(filepath.Join(outDir, "result.json"))
 		if err != nil {
-			res.Invalid = append(res.Invalid, "/out/result.json がない")
+			res.Invalid = append(res.Invalid, fmt.Sprintf("/out/result.json がない（終了コード %d）", code))
 			continue
 		}
 		r, err := output.ParseARB(out, review, nil)
