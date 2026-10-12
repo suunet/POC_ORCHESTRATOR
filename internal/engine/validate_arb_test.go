@@ -67,7 +67,9 @@ func TestValidateARB(t *testing.T) {
 		"ない ID":         {output.Basis{Kind: "catalog", Ref: "NFR-99"}, nil, "カタログにない"},
 		"Git 管理の規約と行":   {output.Basis{Kind: "policy", Ref: ".docs/operations/policies/coding.md:3"}, nil, ""},
 		"Git 管理外の規約の写し": {output.Basis{Kind: "policy", Ref: ".docs/operations/policies/coding-go.md"}, nil, ""},
+		"規約の行の範囲":       {output.Basis{Kind: "policy", Ref: ".docs/operations/policies/coding.md:2-3"}, nil, ""},
 		"規約の行が多すぎる":     {output.Basis{Kind: "policy", Ref: ".docs/operations/policies/coding.md:9"}, nil, "行数"},
+		"規約の行の範囲が多すぎる":  {output.Basis{Kind: "policy", Ref: ".docs/operations/policies/coding.md:2-9"}, nil, "行数"},
 		"ない規約":          {output.Basis{Kind: "policy", Ref: ".docs/operations/policies/none.md"}, nil, "ない"},
 		"規格（記憶による）":     {output.Basis{Kind: "standard", Ref: "W3C Trace Context"}, nil, ""},
 	} {
