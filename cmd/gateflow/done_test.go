@@ -70,3 +70,21 @@ func TestRun_DoneMissingBranch(t *testing.T) {
 		t.Errorf("code=%d err=%q", code, errOut)
 	}
 }
+
+// check は、遷移表にない状態のチケットを必須の指摘として報告し、不合格で終わる。check ids は ID の検査だけ。
+func TestRun_CheckTicketStates(t *testing.T) {
+	root := project(t, actorTable)
+	writeTicket(t, root, "T-001", "ready-for-review")
+	if code, out, errOut := runCmd("check", "--project", root); code != exitOK || !strings.Contains(out, "チケットの状態の検査: チケット 1件、必須 0件") {
+		t.Fatalf("表にある状態: code=%d out=%q err=%q", code, out, errOut)
+	}
+	writeTicket(t, root, "T-002", "in-uat")
+	code, out, _ := runCmd("check", "--project", root)
+	if code != exitFailed || !strings.Contains(out, "[ticket-state] .docs/_stash/tickets/T-002/ticket.md:3 T-002 の状態 in-uat は遷移表 aidd-impl にない") ||
+		!strings.Contains(out, "遷移表に移行の行を足すか、人がステータスを直す") || strings.Contains(out, "T-001 の状態") {
+		t.Errorf("表にない状態: code=%d out=%q", code, out)
+	}
+	if code, out, _ := runCmd("check", "ids", "--project", root); code != exitOK || strings.Contains(out, "ticket-state") {
+		t.Errorf("check ids: code=%d out=%q", code, out)
+	}
+}

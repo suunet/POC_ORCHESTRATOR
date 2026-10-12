@@ -180,7 +180,7 @@ func TestStatus_Fixture(t *testing.T) {
 		t.Errorf("done のチケットが出ている: %+v", w)
 	}
 	if w := findWaiting(st, "T-019"); w == nil || w.Outcome != "unknown-state" || !strings.Contains(w.Reason, "遷移表にない状態（in-uat）") ||
-		!strings.Contains(w.Next, "cancel もできない") {
+		w.Next != "gateflow check の報告を見る" {
 		t.Errorf("T-019 = %+v", w)
 	}
 	if w := findWaiting(st, "T-020"); w == nil || w.Outcome != "stuck" || w.Next != "不要なら gateflow cancel T-020" {

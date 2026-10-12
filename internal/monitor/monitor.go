@@ -166,7 +166,7 @@ func (m *Monitor) readTicket(fsys fs.FS, id string, st *Status) error {
 	case !slices.Contains(m.Workflow.States, string(t.Status)):
 		w.Outcome = "unknown-state"
 		w.Reason = fmt.Sprintf("遷移表にない状態（%s）", t.Status)
-		w.Next = m.cancelNext(t)
+		w.Next = "gateflow check の報告を見る"
 	case res.Outcome == engine.Stopped:
 		w.Reason = res.Reason + "：" + res.Message
 	case res.Outcome == engine.Gate && m.allows("done", string(t.Status)):
@@ -195,7 +195,7 @@ func (m *Monitor) cancelNext(t *ticket.Ticket) string {
 	if m.allows("cancel", string(t.Status)) {
 		return "不要なら gateflow cancel " + t.ID
 	}
-	return "遷移表の cancel の遷移元にない状態なので、cancel もできない。指示書のステータスを確かめる"
+	return "gateflow check の報告を見る"
 }
 
 // latestRun は、名前の順で最後の、state.json のある実行の記録を返す。

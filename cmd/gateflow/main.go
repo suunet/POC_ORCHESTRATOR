@@ -14,6 +14,7 @@ import (
 
 	"gateflow/internal/config"
 	"gateflow/internal/container"
+	"gateflow/internal/engine"
 	"gateflow/internal/idcheck"
 )
 
@@ -40,7 +41,7 @@ const usage = `使い方:
   gateflow hold|unhold <T-NNN> [--project <dir>]  保留の印を付ける・外す
   gateflow cancel <T-NNN> [--project <dir>] チケットを中止する
   gateflow doctor sandbox [--project <dir>] エージェントが外へ出られないことを確かめる
-  gateflow check [--project <dir>]      すべての検証（M0ではID整合チェックだけ）
+  gateflow check [--project <dir>]      すべての検証（ID整合チェックと、チケットの状態が遷移表にあるか）
   gateflow check ids [--project <dir>]  ID整合チェックだけ
 `
 
@@ -86,16 +87,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "check":
 		rest := args[1:]
 		if len(rest) > 0 && rest[0] == "ids" {
-			rest = rest[1:]
+			return checkIDs(rest[1:], false, stdout, stderr)
 		}
-		return checkIDs(rest, stdout, stderr)
+		return checkIDs(rest, true, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "知らないコマンド: %s\n%s", args[0], usage)
 		return exitUsage
 	}
 }
 
-func checkIDs(args []string, stdout, stderr io.Writer) int {
+// checkIDs は、ID 整合チェックを行う。all なら、チケットの状態の検査（遷移表にない状態）も行う。
+func checkIDs(args []string, all bool, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	dir := fs.String("project", ".", "プロジェクトのルート")
@@ -129,7 +131,25 @@ func checkIDs(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "ID整合チェック: 定義 %d件（子 %d件）、必須 %d件、推奨 %d件\n",
 		res.Definitions, res.Children, required, recommended)
-	if res.HasErrors() {
+	failed := res.HasErrors()
+	if all {
+		_, wf, _, err := loadProject(*dir)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return exitUsage
+		}
+		n, findings, err := engine.CheckTicketStates(*dir, wf)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return exitUsage
+		}
+		for _, f := range findings {
+			fmt.Fprintf(stdout, "%s [ticket-state] %s:%d %s\n", idcheck.Required, f.File, f.Line, f.Message)
+		}
+		fmt.Fprintf(stdout, "チケットの状態の検査: チケット %d件、必須 %d件\n", n, len(findings))
+		failed = failed || len(findings) > 0
+	}
+	if failed {
 		return exitFailed
 	}
 	return exitOK
