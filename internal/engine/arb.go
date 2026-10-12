@@ -130,7 +130,7 @@ func ValidateARB(c ARBCheck) (ARBValidation, error) {
 			add("作業ツリーの %s を変えている（ARB が直してよいのは %s の下だけ）", ch.Path, catalogDir)
 			continue
 		}
-		for _, id := range findIDs(strings.Join(append(append([]string{}, ch.Added...), ch.Removed...), "\n")) {
+		for _, id := range lineIDs(append(append([]string{}, ch.Added...), ch.Removed...), findIDs) {
 			who, ok := editors[id]
 			if !ok {
 				add("%s の変えた行の ID %s が、どの裁定の edits にもない", ch.Path, id)
@@ -179,6 +179,27 @@ func applyContractGuard(r *output.ARBResult, hits map[int][]string) (converted [
 	r.Section2 = ""
 	r.Outcome = "escalated"
 	return converted, reset
+}
+
+// lineIDs は、変えた行が定義している ID を返す。表の行は1列目の ID（その行の定義）だけを数え、
+// 本文の中で参照している ID は数えない（例：NFR-09 の行が VAR-18 を参照していても、変えたのは NFR-09 の行）。
+// 表でない行は、出てくる ID をすべて数える。
+func lineIDs(lines []string, findIDs func(string) []string) []string {
+	var out []string
+	for _, l := range lines {
+		t := strings.TrimSpace(l)
+		ids := findIDs(t)
+		if strings.HasPrefix(t, "|") {
+			cells := strings.Split(strings.Trim(t, "|"), "|")
+			ids = findIDs(cells[0])
+		}
+		for _, id := range ids {
+			if !slices.Contains(out, id) {
+				out = append(out, id)
+			}
+		}
+	}
+	return out
 }
 
 // policyExists は、規約の参照（リポジトリの中のパスと、任意で行）が、ARB の見た版か渡した写しにあるかを確かめる。

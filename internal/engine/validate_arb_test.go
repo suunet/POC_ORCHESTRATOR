@@ -83,10 +83,16 @@ func TestValidateARB(t *testing.T) {
 	}
 
 	// 作業ツリーの変更：カタログの外、edits にない ID、契約の ID の行
-	writeTree(t, after, map[string]string{".docs/design/buc.md": cat[".docs/design/buc.md"] + "| BUC-S02 | UC-002 |\n"})
+	writeTree(t, after, map[string]string{".docs/design/buc.md": cat[".docs/design/buc.md"] + "| UC-002 | 新しい |\n"})
 	if err := check(output.Basis{Kind: "catalog", Ref: "UC-001"}, []string{"UC-002"}, nil); err != nil || len(hits) != 0 {
 		t.Errorf("edits に挙げた変更: hits = %v, err = %v", hits, err)
 	}
+	// 表の行は、その行が定義している ID（1列目）で数える。本文で参照している ID（UC-001）は数えない
+	writeTree(t, after, map[string]string{".docs/design/buc.md": cat[".docs/design/buc.md"] + "| UC-002 | UC-001 を参照する |\n"})
+	if err := check(output.Basis{Kind: "standard", Ref: "RFC"}, []string{"UC-002"}, []string{"UC-001"}); err != nil || len(hits) != 0 {
+		t.Errorf("行の中の参照: hits = %v, err = %v", hits, err)
+	}
+	writeTree(t, after, map[string]string{".docs/design/buc.md": cat[".docs/design/buc.md"] + "| UC-002 | 新しい |\n"})
 	// (a) 変えた行に契約の ID：edits でその裁定を特定する
 	if err := check(output.Basis{Kind: "standard", Ref: "RFC"}, []string{"UC-002"}, []string{"UC-002"}); err != nil || len(hits[0]) != 1 || hits[0][0] != "UC-002" {
 		t.Errorf("変えた行の契約: hits = %v, err = %v", hits, err)
