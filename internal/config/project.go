@@ -191,7 +191,7 @@ type Policy struct {
 }
 
 var (
-	validRoles  = map[string]bool{"dev": true, "bj": true}
+	validRoles  = map[string]bool{"dev": true, "bj": true, "arb": true}
 	namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 	hostPort    = regexp.MustCompile(`^[A-Za-z0-9.-]+:[0-9]{1,5}$`)
 	envName     = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
@@ -304,7 +304,7 @@ func (p *Project) validate() []error {
 		}
 		for _, r := range pol.Roles {
 			if !validRoles[r] {
-				errs = append(errs, fmt.Errorf("policies[%d]: roles の %q は dev か bj でない", i, r))
+				errs = append(errs, fmt.Errorf("policies[%d]: roles の %q は dev・bj・arb のどれでもない", i, r))
 			}
 		}
 	}
