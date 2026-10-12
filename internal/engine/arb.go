@@ -206,7 +206,12 @@ func lineIDs(lines []string, findIDs func(string) []string) []string {
 func policyExists(ref, seen, in string) error {
 	path, line := strings.TrimSpace(ref), 0
 	if i := strings.LastIndex(path, ":"); i > 0 {
-		if n, err := strconv.Atoi(path[i+1:]); err == nil {
+		// 行は1つ（:16）か範囲（:14-17）。範囲は終わりの行で確かめる
+		lines := path[i+1:]
+		if j := strings.LastIndex(lines, "-"); j > 0 {
+			lines = lines[j+1:]
+		}
+		if n, err := strconv.Atoi(lines); err == nil {
 			path, line = path[:i], n
 		}
 	}
