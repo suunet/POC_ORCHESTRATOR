@@ -111,8 +111,11 @@ func (e *Engine) ARBTrial(ctx context.Context, src, dest string) (TrialResult, e
 	cmd, stdin := e.Agent.Command(req)
 	for attempt := 1; attempt <= 1+outputRetries; attempt++ {
 		res.Attempts = attempt
-		work := filepath.Join(dest, fmt.Sprintf("work-%d", attempt))
-		outDir := filepath.Join(dest, fmt.Sprintf("out-%d", attempt))
+		// NOTE: Docker Desktop は、消してすぐ同じパスに作り直したディレクトリを bind できないことがある
+		// （bind source path does not exist）。やり直しの試験でも、試みごとに新しい名前を使う
+		stamp := e.Now().UTC().Format("20060102-150405")
+		work := filepath.Join(dest, fmt.Sprintf("work-%s-%d", stamp, attempt))
+		outDir := filepath.Join(dest, fmt.Sprintf("out-%s-%d", stamp, attempt))
 		if err := copyTree(filepath.Join(src, "seen"), work); err != nil {
 			return res, err
 		}
