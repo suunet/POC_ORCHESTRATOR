@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gateflow monitor</title>
+<style>
+/* 色と文字の値は、人のデザインシステムのテーマから写した（主色は neonBlue）。値だけを写し、コードは写さない */
+:root {
+  color-scheme: light dark;
+  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius: 8px;
+  --bg: #ffffff; --paper: #ffffff; --level1: #f9fafb; --level2: #f1f1f4;
+  --divider: #dcdfe4; --text: #212636; --text2: #667085;
+  --primary: #635bff; --primary-light: #7578ff; --primary-bg: #ecf0ff;
+  --error: #f04438; --error-bg: #fef3f2; --warning: #fb9c0c; --warning-bg: #fffaea;
+  --success: #15b79f; --info: #04aad6;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #090a0b; --paper: #121517; --level1: #202427; --level2: #32383e;
+    --divider: #32383e; --text: #f0f4f8; --text2: #9fa6ad;
+    --primary: #7578ff; --primary-light: #9ca7ff; --primary-bg: #1e1650;
+    --error: #f97970; --error-bg: #460d09; --warning: #ffbb1f; --warning-bg: #471701;
+    --success: #2ed3b8; --info: #10bee8;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 0.875rem; line-height: 1.57; }
+header { display: flex; align-items: baseline; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--divider); background: var(--paper); }
+header h1 { margin: 0; font-size: 1.125rem; font-weight: 500; line-height: 1.2; }
+header .meta { color: var(--text2); font-size: 0.75rem; line-height: 1.66; }
+main { padding: 16px 24px; display: grid; gap: 24px; }
+h2 { margin: 0 0 8px; font-size: 0.875rem; font-weight: 500; color: var(--text2); letter-spacing: 0.5px; }
+.card { background: var(--paper); border: 1px solid var(--divider); border-radius: var(--radius); padding: 12px 16px; }
+.empty { color: var(--text2); }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--divider); }
+th { color: var(--text2); font-weight: 500; font-size: 0.75rem; }
+tr:last-child td { border-bottom: none; }
+code, .mono { font-family: var(--mono); font-size: 0.8125rem; }
+.chip { display: inline-block; padding: 0 8px; border-radius: 999px; font-size: 0.75rem; line-height: 1.66; background: var(--level2); color: var(--text); white-space: nowrap; }
+.chip.gate { background: var(--primary-bg); color: var(--primary); }
+.chip.stopped, .chip.interrupted { background: var(--error-bg); color: var(--error); }
+.chip.runnable { background: var(--warning-bg); color: var(--warning); }
+.run-head { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; margin-bottom: 8px; }
+.run-head .id { font-weight: 500; font-size: 1rem; }
+.kv { color: var(--text2); }
+.kv b { color: var(--text); font-weight: 500; }
+.over { color: var(--error); }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.cols h3 { margin: 8px 0 4px; font-size: 0.75rem; font-weight: 500; color: var(--text2); }
+ul { margin: 0; padding: 0; list-style: none; }
+li { padding: 2px 0; border-bottom: 1px dashed var(--divider); }
+li:last-child { border-bottom: none; }
+li.alert { color: var(--error); font-weight: 500; }
+li .t { color: var(--text2); margin-right: 8px; }
+.err { color: var(--error); }
+</style>
+</head>
+<body>
+<header>
+  <h1>gateflow monitor</h1>
+  <span class="meta" id="meta">読み込み中…</span>
+</header>
+<main>
+  <section>
+    <h2>人を待っているもの</h2>
+    <div class="card" id="waiting"></div>
+  </section>
+  <section>
+    <h2>実行中</h2>
+    <div id="running"></div>
+  </section>
+  <section id="errors-section" hidden>
+    <h2>読めなかったもの</h2>
+    <div class="card err" id="errors"></div>
+  </section>
+</main>
+<script>
+"use strict";
+// NOTE: 記録には AI が書いた文が入るので、innerHTML は使わず textContent で組み立てる
+function el(tag, attrs, ...children) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") e.className = v; else e.setAttribute(k, v);
+  }
+  for (const c of children) {
+    if (c === null || c === undefined) continue;
+    e.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  }
+  return e;
+}
+const outcomeLabel = { gate: "関門", stopped: "止まった", interrupted: "中断", runnable: "run を待つ", "nothing-to-do": "保留など", finished: "終わり" };
+function hms(t) { return t ? t.slice(11, 19) : ""; }
+function minutes(sec) { return Math.floor(sec / 60) + "分" + String(sec % 60).padStart(2, "0") + "秒"; }
+
+function renderWaiting(list) {
+  const box = document.getElementById("waiting");
+  box.replaceChildren();
+  if (!list.length) { box.append(el("div", { class: "empty" }, "人を待っているチケットはない")); return; }
+  const tbody = el("tbody");
+  for (const w of list) {
+    const reason = el("td", {}, w.reason);
+    for (const warn of w.warnings || []) reason.append(el("div", { class: "err" }, warn));
+    tbody.append(el("tr", {},
+      el("td", { class: "mono" }, w.ticket),
+      el("td", {}, w.title),
+      el("td", {}, el("span", { class: "chip " + w.outcome }, outcomeLabel[w.outcome] || w.outcome), " ", el("span", { class: "mono" }, w.status)),
+      reason,
+      el("td", {}, el("code", {}, w.next || ""))));
+  }
+  box.append(el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, "チケット"), el("th", {}, "題名"), el("th", {}, "状態"), el("th", {}, "止まった理由"), el("th", {}, "次の操作"))), tbody));
+}
+
+function renderRunning(list) {
+  const box = document.getElementById("running");
+  box.replaceChildren();
+  if (!list.length) { box.append(el("div", { class: "card empty" }, "実行中のチケットはない")); return; }
+  for (const r of list) {
+    const runSec = r.limits.runMinutes * 60;
+    const elapsed = el("b", { class: r.stepSeconds > runSec ? "over" : "" }, minutes(r.stepSeconds));
+    const loops = Object.entries(r.loops).map(([k, v]) => k + " " + v + "/" + r.limits.loops).join("、") || "なし";
+    const head = el("div", { class: "run-head" },
+      el("span", { class: "id mono" }, r.ticket), el("span", {}, r.title),
+      el("span", { class: "kv" }, "step ", el("b", {}, r.step), "（", r.stepNo, " 番目、試行 ", el("b", {}, r.attempt), "）"),
+      el("span", { class: "kv" }, "経過 ", elapsed, "（上限：1回 " + r.limits.runMinutes + "分、無反応 " + r.limits.idleMinutes + "分）"),
+      el("span", { class: "kv" }, "step の数 ", el("b", {}, r.steps + "/" + r.limits.steps)),
+      el("span", { class: "kv" }, "往復 ", el("b", {}, loops)));
+    const events = el("ul");
+    for (const e of r.events.slice().reverse()) events.append(el("li", { class: e.alert ? "alert" : "" }, el("span", { class: "t mono" }, hms(e.time)), e.event + "：" + e.text));
+    const tools = el("ul");
+    for (const t of r.tools) tools.append(el("li", {}, el("b", {}, t.name), " ", el("span", { class: "mono" }, t.target)));
+    if (!r.tools.length) tools.append(el("li", { class: "empty" }, "まだない"));
+    const denied = el("ul");
+    for (const d of r.denied) denied.append(el("li", { class: "alert" }, d.host + "：" + d.count + " 件"));
+    if (!r.denied.length) denied.append(el("li", { class: "empty" }, "なし（記録は実行の終わりに書かれる）"));
+    box.append(el("div", { class: "card" }, head,
+      el("div", { class: "cols" },
+        el("div", {}, el("h3", {}, "直近のイベント（新しい順）"), events),
+        el("div", {}, el("h3", {}, "エージェントの直近のツール呼び出し"), tools, el("h3", {}, "プロキシの拒否"), denied))));
+  }
+}
+
+async function refresh() {
+  const meta = document.getElementById("meta");
+  try {
+    const res = await fetch("/api/status", { cache: "no-store" });
+    if (!res.ok) throw new Error(res.status + " " + (await res.text()));
+    const st = await res.json();
+    meta.textContent = st.project + "　更新 " + hms(st.time) + "Z（2秒ごと）";
+    renderWaiting(st.waiting);
+    renderRunning(st.running);
+    const errs = st.errors || [];
+    document.getElementById("errors-section").hidden = !errs.length;
+    document.getElementById("errors").replaceChildren(...errs.map(x => el("div", {}, x)));
+  } catch (e) {
+    meta.textContent = "読み込めない：" + e.message;
+  }
+}
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

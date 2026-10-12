@@ -33,6 +33,7 @@ const usage = `使い方:
   gateflow run [<T-NNN>] [--project <dir>]  チケットを人間関門まで進める（省くと進められるチケットを順に）
   gateflow resume <T-NNN> [--project <dir>] 止まった実行を再開の位置から続ける
   gateflow status [<T-NNN>] [--project <dir>]  状態と、次にすることを表示する
+  gateflow monitor [--project <dir>] [--port <N>]  実行の様子を見る読み取り専用の画面（127.0.0.1 だけ。既定のポート 7420）
   gateflow ready <T-NNN> [--project <dir>]  質疑がすべて確定したら P2 へ進める
   gateflow approve <T-NNN> [--project <dir>]  §4.5 がすべてチェックされたら実装へ進める
   gateflow hold|unhold <T-NNN> [--project <dir>]  保留の印を付ける・外す
@@ -60,7 +61,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "version":
 		fmt.Fprintf(stdout, "gateflow %s\n", version)
 		return exitOK
-	case "run", "resume", "login", "doctor":
+	case "run", "resume", "login", "doctor", "monitor":
 		ctx, cancel := signalContext()
 		defer cancel()
 		switch args[0] {
@@ -70,6 +71,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return cmdResume(ctx, args[1:], stdout, stderr)
 		case "login":
 			return cmdLogin(ctx, args[1:], stdout, stderr)
+		case "monitor":
+			return cmdMonitor(ctx, args[1:], stdout, stderr)
 		default:
 			return cmdDoctor(ctx, args[1:], stdout, stderr)
 		}
