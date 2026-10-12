@@ -70,10 +70,10 @@ AI同士の遷移（P2→P3、P5→P5後など）はgateflowが自動で進め�
 | `ready-to-approve` | 実装の許可待ち | `ready-to-implement` | 人（`gateflow approve`。§4.5の承認＝キューへの登録。着手宣言は廃止） |
 | `ready-to-implement` | 実装待ち（保留の印を付けられる） | `implementing` | gateflow |
 | `implementing` | P5（テスト→実装）→自動ゲート→P5後（BJ） | `ready-for-review` | gateflow |
-| `ready-for-review` | 人のコードレビュー。OKなら人がpush・PR作成・develop/stgへのデプロイ | `in-uat`／`feedback` | 人（`gateflow uat`） |
+| `ready-for-review` | 人のコードレビュー。OKなら人がpush・PR作成・develop/stgへのデプロイ | `in-uat`／`feedback`／`done` | 人（`gateflow uat`。`done`は、人が git で main へマージした後の`gateflow done`） |
 | `in-uat` | UAT中 | `feedback`／mainへのマージで`done` | 人／gateflow |
 | `feedback` | FBの取り込み、質問と正本の差分の作成（対話） | 分類に応じた戻り先 | gateflow（人の確定後） |
-| `done` | 完了。mainへのマージを検出してgateflowが書き、アーカイブする | ― | gateflow |
+| `done` | 完了。人が git で main へマージした後、`gateflow done`が作業ブランチの先頭が main に含まれている（祖先である）ことを確かめて書く。gateflow は main に書き込まない。マージの自動の検出（M4）で gateflow が書く経路を足す。アーカイブする | ― | 人（`gateflow done`）／gateflow（M4） |
 | `cancelled` | 中止 | ― | 人 |
 
 ドキュメントチケットはUATを通らず、`ready-for-review`のあとmainへのマージで`done`になる。
@@ -81,7 +81,7 @@ AI同士の遷移（P2→P3、P5→P5後など）はgateflowが自動で進め�
 | 項目 | 決定 |
 | --- | --- |
 | 状態の管理 | 2層に分ける。ライフサイクルは指示書の`ステータス:`、実行中の状態（現在のstep・ループの回数・再開位置・ログ）はチケットごとの`runs/` |
-| done | mainへのマージで完了。コミットメッセージのT-NNNを検出してgateflowが書く。squashマージでもT-NNNを残す。workflow.mdの「doneは人が書く」は改訂する |
+| done | mainへのマージで完了。M2.5 からは、人が`gateflow done`で書く（作業ブランチの先頭が main に含まれていなければ、理由を示して失敗する。遷移表は`ready-for-review`→`done`（人）。2026-10-12、人の決定）。M4 で、コミットメッセージのT-NNNを検出してgateflowが書く経路を足す。squashマージでもT-NNNを残す。workflow.mdの「doneは人が書く」は改訂する |
 | アーカイブ | `done`・`cancelled`のチケットは`.docs/_stash/archive/tickets/`へ移す。取り込み済みの要件依頼書も同様。gateflowは削除しない |
 | retro | 人（PLなど）が`gateflow retro`で呼び出したときだけ実行する。自動では起動しない |
 | 差し戻し | UATはmainへのマージ前なので、同じチケット・同じブランチで扱う |
@@ -329,7 +329,7 @@ POC_ORCHESTRATOR/            ツール（gateflow）
 | --- | --- |
 | 準備 | `config`（個人の設定）、`login`、`setup`（プロジェクトの初回設定）、`doctor`（環境と定義の点検） |
 | チケットを進める | `new`（P1の対話）、`new --from`（要件依頼書の取り込み）、`run`（人間関門まで進めて終了）、`watch`（常駐）、`status`（`--all`でアーカイブも） |
-| 人間関門 | `ready`、`approve`、`uat`、`feedback --from review／uat`、`hold`・`unhold`、`cancel`。機械検証付きで状態を書き換える。手での書き換えは警告のみ |
+| 人間関門 | `ready`、`approve`、`done`（作業ブランチが main に含まれていることを確かめて完了にする。マージは git で行う）、`uat`、`feedback --from review／uat`、`hold`・`unhold`、`cancel`。機械検証付きで状態を書き換える。手での書き換えは警告のみ |
 | その他 | `monitor`（読み取り専用の監視 UI。`127.0.0.1`だけで待ち受ける。`watch`（常駐）とは別）、`resume`、`check`（検証の手動実行。`check ids`でID整合チェックだけ）、`retro`、`render`（workflow.mdの表の生成）、`version` |
 | 内部用 | `proxy`（許可リストのプロキシ。人は使わない） |
 
@@ -344,7 +344,7 @@ MVPは「HYDRAを要件から作り直すのに最低限必要な機能」とし
 | M0 準備 | ツールの骨組み、V2の作成とV1からのカタログ（`uc/`を除く）と規約の取り込み、組み込みのひな形、設計文書の配置 | ID整合チェックを手で実行でき、取り込んだカタログに誤りがない |
 | M1 最小の1本 | 人が書いた指示書からP5だけを実行（clone、コンテナ、Claude Code、出力の検証、検証コマンド、commit、取り込み）。安全のため、時間の上限（1回の実行と無反応）だけをM2から前倒しで入れる。検証コマンドに不合格なら差し戻さず止める | 最も単純なユースケースが実装される。push・外部POST・`.env`の書き換えができないことを確認 |
 | M2 流れを通す | 遷移表、状態の2層管理、人間関門のコマンド、上限（時間以外）と進展なしの検知、差し戻しのループ、`status`、ダミーのAI | 1件がP2→P3→P5→P5後→`ready-for-review`まで、関門以外の介入なしで進む |
-| M2.5 監視 UI | 読み取り専用のローカルの監視 UI（`gateflow monitor`）。`127.0.0.1`だけで待ち受け、口は`GET /`（埋め込みの HTML 1枚）と`GET /api/status`（JSON）だけで、GET 以外は 405。読むのはプロジェクトの tickets の下の記録だけ。実行中の run の印（`running.json`：プロセス ID とその開始時刻）と、step・試行の開始の記録 | 実行中のチケットの step・試行の回数・経過時間と上限・往復の回数・直近のイベント・プロキシの拒否・エージェントの直近のツール呼び出しと、人を待っているチケットの止まった理由と次の操作が、1画面で分かる |
+| M2.5 監視 UI | 読み取り専用のローカルの監視 UI（`gateflow monitor`）。`127.0.0.1`だけで待ち受け、口は`GET /`（埋め込みの HTML 1枚）と`GET /api/status`（JSON）だけで、GET 以外は 405。読むのはプロジェクトの tickets の下の記録だけ。実行中の run の印（`running.json`：プロセス ID とその開始時刻）と、step・試行の開始の記録、プロキシの判定の逐次の記録。`done`のチケットは出さない。あわせて`gateflow done` | 実行中のチケットの step・試行の回数・経過時間と上限・往復の回数・直近のイベント・プロキシの拒否・エージェントの直近のツール呼び出しと、人を待っているチケットの止まった理由と次の操作が、1画面で分かる |
 | M3 検証を固める | ID整合チェック、受入条件のテスト、P5の2分割、必須と推奨、規約の目次、`touchMap`、DBなどのサービス（共有方式。composeのサービスを内部ネットワークへ） | テストを書き換えて通そうとした場合に止まることを、わざと起こして確認 |
 | M4 差し戻しと完了 | UATシート、FBの取り込みと分類、戻り先への遷移、`done`の検出、アーカイブ | UATの差し戻しを1件、正本へ反映してから`done`まで通す |
 | M5 入口 | `new`、要件依頼書のスキル、`new --from` | 要件依頼書から`draft`を始められる |
