@@ -171,3 +171,29 @@ func TestRun_FeedbackWriteFailureStops(t *testing.T) {
 		t.Errorf("差し戻しの内容が書けないのに P5 をやり直した")
 	}
 }
+
+// 同じチケットを実行中の gateflow があれば、run も resume も始めない（ステータスを書く前に止める。M2.8）。
+func TestRun_LockedTicketDoesNotRun(t *testing.T) {
+	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Approved}, "p3-prepare": {p3Done}})
+	unlock, err := f.e.Ticket.Lock(f.e.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	if _, err := f.e.Run(t.Context()); !errors.Is(err, ticket.ErrLocked) {
+		t.Fatalf("Run = %v, want ErrLocked", err)
+	}
+	if _, err := f.e.Resume(t.Context()); !errors.Is(err, ticket.ErrLocked) {
+		t.Fatalf("Resume = %v, want ErrLocked", err)
+	}
+	if len(f.runner.calls) != 0 || f.status(t) != ticket.ReadyToPrepare {
+		t.Errorf("ロック中に進んだ: %v, %s", f.runner.calls, f.status(t))
+	}
+	unlock()
+	if res := mustRun(t, f); f.status(t) != ticket.ReadyToApprove {
+		t.Errorf("外した後に進めない: %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(f.root, ".docs/_stash/tickets/T-002", ticket.LockFile)); !os.IsNotExist(err) {
+		t.Error("実行の後に印が残っている")
+	}
+}

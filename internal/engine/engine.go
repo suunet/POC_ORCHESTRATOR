@@ -203,6 +203,11 @@ func (e *Engine) Run(ctx context.Context) (Result, error) {
 		res.Warnings = warnings
 		return res, nil
 	}
+	unlock, err := e.lock()
+	if err != nil {
+		return Result{}, err
+	}
+	defer unlock()
 	st := &State{Ticket: e.Ticket.ID, Workflow: e.Workflow.Name, Loops: map[string]int{}, Prints: map[string]string{}, Status: status}
 	if auto.To != "" {
 		if err := e.setStatus(st, auto.To); err != nil {
@@ -216,6 +221,12 @@ func (e *Engine) Run(ctx context.Context) (Result, error) {
 
 // Resume は、止まった実行を再開の位置から続ける（人が原因を直した後）。ループの往復と step の数は数え直す。
 func (e *Engine) Resume(ctx context.Context) (Result, error) {
+	// 再開済みの印を付ける前にロックを取る（取れずに止まったとき、再開できなくならないように）
+	unlock, err := e.lock()
+	if err != nil {
+		return Result{}, err
+	}
+	defer unlock()
 	prev, dir, err := LatestState(e.runsDir())
 	if err != nil {
 		return Result{}, fmt.Errorf("%s に再開できる実行がない", e.Ticket.ID)
@@ -310,6 +321,20 @@ func (e *Engine) next(status string) string {
 		}
 	}
 	return ""
+}
+
+// lock は、同じチケットの2つの run を止める印を取り、外す関数を返す（人が誤って2回 run するなど。M2.8）。
+// ステータスを書く前に取る。
+func (e *Engine) lock() (func(), error) {
+	unlock, err := e.Ticket.Lock(e.Now())
+	if err != nil {
+		return nil, fmt.Errorf("%s を実行できない：%w", e.Ticket.ID, err)
+	}
+	return func() {
+		if err := unlock(); err != nil {
+			e.cleanupError(ticket.LockFile, err)
+		}
+	}, nil
 }
 
 // loop は、step から始めて、関門・終わり・止まるところまで進める。
