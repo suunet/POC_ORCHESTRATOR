@@ -2,11 +2,14 @@ package monitor
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"net/http"
 )
 
-// Handler は、監視の UI の口を返す。口は GET / （埋め込みの HTML 1枚）と GET /api/status（JSON）の2つだけ。
-// GET 以外のメソッドは 405、知らないパスは 404。読み取り専用で、要求から読み先のパスを受け取らない。
+// Handler は、監視の UI の口を返す。口は GET / （埋め込みの HTML 1枚）、GET /api/status、GET /api/ticket?id=、
+// GET /api/source?path= の4つだけ（M2.8 で後の2つを足した）。GET 以外のメソッドは 405、知らないパスは 404。
+// 読み取り専用で、/api/source が読めるのは tickets の下とカタログだけ（os.Root で範囲の外へ出ない）。
 func Handler(m *Monitor, page []byte) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
@@ -29,10 +32,37 @@ func Handler(m *Monitor, page []byte) http.Handler {
 				http.Error(w, "記録を読めない: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
-			h.Set("Content-Type", "application/json; charset=utf-8")
-			json.NewEncoder(w).Encode(st)
+			writeJSON(w, st)
+		case "/api/ticket":
+			d, err := m.Ticket(r.URL.Query().Get("id"))
+			switch {
+			case errors.Is(err, fs.ErrNotExist):
+				http.NotFound(w, r)
+			case err != nil:
+				http.Error(w, err.Error(), http.StatusBadRequest)
+			default:
+				writeJSON(w, d)
+			}
+		case "/api/source":
+			f, err := m.Source(r.URL.Query().Get("path"))
+			switch {
+			case errors.Is(err, ErrOutside):
+				http.Error(w, err.Error(), http.StatusForbidden)
+			case errors.Is(err, fs.ErrNotExist):
+				http.NotFound(w, r)
+			case err != nil:
+				http.Error(w, err.Error(), http.StatusBadRequest)
+			default:
+				writeJSON(w, f)
+			}
 		default:
 			http.NotFound(w, r)
 		}
 	})
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	// NOTE: 応答の途中で相手が切れても、読み取り専用なので記録するものはない
+	json.NewEncoder(w).Encode(v)
 }

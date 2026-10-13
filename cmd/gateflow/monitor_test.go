@@ -48,10 +48,10 @@ func TestMonitorServer_PageAndStatus(t *testing.T) {
 	rec = httptest.NewRecorder()
 	srv.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/status", nil))
 	var st struct {
-		Waiting []struct{ Ticket, Outcome, Next string }
+		Cards []struct{ Kind, Ticket, Next string }
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil || len(st.Waiting) != 1 || st.Waiting[0].Outcome != "gate" ||
-		!strings.Contains(st.Waiting[0].Next, "gateflow approve T-001") {
+	if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil || len(st.Cards) != 1 || st.Cards[0].Kind != "approve" ||
+		!strings.Contains(st.Cards[0].Next, "gateflow approve T-001") {
 		t.Errorf("/api/status = %s（%v）", rec.Body, err)
 	}
 }

@@ -5,163 +5,482 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>gateflow monitor</title>
 <style>
-/* 色と文字の値は、人のデザインシステムのテーマから写した（主色は neonBlue）。値だけを写し、コードは写さない */
+/* 色と文字の値は、人のデザインシステムのテーマと、相談役の見本（M2.8）から写した。値だけを写し、コードは写さない。
+   暗い側は見本の値そのもの、明るい側は同じ系統のデザインシステムの色。外部のフォントは読み込まない */
 :root {
   color-scheme: light dark;
-  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --font: "Inter", "Noto Sans JP", -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --radius: 8px;
-  --bg: #ffffff; --paper: #ffffff; --level1: #f9fafb; --level2: #f1f1f4;
-  --divider: #dcdfe4; --text: #212636; --text2: #667085;
-  --primary: #635bff; --primary-light: #7578ff; --primary-bg: #ecf0ff;
-  --error: #f04438; --error-bg: #fef3f2; --warning: #fb9c0c; --warning-bg: #fffaea;
-  --success: #15b79f; --info: #04aad6;
+  --bg: #f9fafb; --paper: #ffffff; --level1: #f1f1f4; --divider: #dcdfe4; --divider2: #eaecf0;
+  --text: #212636; --text2: #667085; --text3: #32383e; --todo: #8a929a;
+  --primary: #635bff; --primary-bg: #ecf0ff; --primary-text: #432ad8; --link: #4e36f5;
+  --warning: #fb9c0c; --warning-bg: #fffaea; --warning-text: #b84d05;
+  --error: #f04438; --error-bg: #fef3f2; --error-text: #bb241a;
+  --success-bg: #f0fdfa; --success-text: #107569; --done-bg: #ccfbef; --done-text: #107569;
+  --neutral-bg: #f1f1f4; --neutral-text: #32383e;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #090a0b; --paper: #121517; --level1: #202427; --level2: #32383e;
-    --divider: #32383e; --text: #f0f4f8; --text2: #9fa6ad;
-    --primary: #7578ff; --primary-light: #9ca7ff; --primary-bg: #1e1650;
-    --error: #f97970; --error-bg: #460d09; --warning: #ffbb1f; --warning-bg: #471701;
-    --success: #2ed3b8; --info: #10bee8;
+    --bg: #090a0b; --paper: #121517; --level1: #202427; --divider: #32383e; --divider2: #202427;
+    --text: #f0f4f8; --text2: #9fa6ad; --text3: #d5dade; --todo: #8a929a;
+    --primary: #7578ff; --primary-bg: #1e1650; --primary-text: #c9ccff; --link: #9ca7ff;
+    --warning: #ffbb1f; --warning-bg: #471701; --warning-text: #ffd97a;
+    --error: #f97970; --error-bg: #460d09; --error-text: #ffb3ad;
+    --success-bg: #0f2f2a; --success-text: #8fe3d4; --done-bg: #123a34; --done-text: #8fe3d4;
+    --neutral-bg: #202427; --neutral-text: #d5dade;
   }
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 0.875rem; line-height: 1.57; }
-header { display: flex; align-items: baseline; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--divider); background: var(--paper); }
-header h1 { margin: 0; font-size: 1.125rem; font-weight: 500; line-height: 1.2; }
-header .meta { color: var(--text2); font-size: 0.75rem; line-height: 1.66; }
-main { padding: 16px 24px; display: grid; gap: 24px; }
-h2 { margin: 0 0 8px; font-size: 0.875rem; font-weight: 500; color: var(--text2); letter-spacing: 0.5px; }
-.card { background: var(--paper); border: 1px solid var(--divider); border-radius: var(--radius); padding: 12px 16px; }
-.empty { color: var(--text2); }
-table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--divider); }
-th { color: var(--text2); font-weight: 500; font-size: 0.75rem; }
-tr:last-child td { border-bottom: none; }
-code, .mono { font-family: var(--mono); font-size: 0.8125rem; }
-.chip { display: inline-block; padding: 0 8px; border-radius: 999px; font-size: 0.75rem; line-height: 1.66; background: var(--level2); color: var(--text); white-space: nowrap; }
-.chip.gate { background: var(--primary-bg); color: var(--primary); }
-.chip.stopped, .chip.interrupted, .chip.stuck, .chip.unknown-state { background: var(--error-bg); color: var(--error); }
-.chip.review { background: var(--primary-bg); color: var(--primary); }
-.nowrap { white-space: nowrap; }
-.chip.runnable { background: var(--warning-bg); color: var(--warning); }
-.run-head { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; margin-bottom: 8px; }
-.run-head .id { font-weight: 500; font-size: 1rem; }
-.kv { color: var(--text2); }
-.kv b { color: var(--text); font-weight: 500; }
-.over { color: var(--error); }
-.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
-.cols h3 { margin: 8px 0 4px; font-size: 0.75rem; font-weight: 500; color: var(--text2); }
-ul { margin: 0; padding: 0; list-style: none; }
-li { padding: 2px 0; border-bottom: 1px dashed var(--divider); }
-li:last-child { border-bottom: none; }
-li.alert { color: var(--error); font-weight: 500; }
-li .t { color: var(--text2); margin-right: 8px; }
-.err { color: var(--error); }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; line-height: 1.6; }
+a { color: var(--link); cursor: pointer; text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, .mono { font-family: var(--mono); font-size: 12.5px; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; padding: 16px 24px; border-bottom: 1px solid var(--divider); background: var(--paper); }
+header .brand { display: flex; align-items: baseline; gap: 12px; }
+header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+header .project { color: var(--text2); font-size: 13px; }
+header .meta { margin-left: auto; color: var(--text2); font-size: 12px; }
+.pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.pill { padding: 2px 12px; border-radius: 999px; font-size: 13px; font-weight: 500; background: var(--neutral-bg); color: var(--neutral-text); }
+.pill.human { background: var(--warning-bg); color: var(--warning-text); }
+.pill.run { background: var(--primary-bg); color: var(--primary-text); }
+.pill.done { background: var(--success-bg); color: var(--success-text); }
+main { max-width: 1440px; margin: 0 auto; padding: 24px; display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
+.col-main { flex: 999 1 720px; min-width: 0; display: flex; flex-direction: column; gap: 28px; }
+aside { flex: 1 1 320px; min-width: 0; display: flex; flex-direction: column; gap: 20px; }
+section { display: flex; flex-direction: column; gap: 12px; }
+.sec-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.sec-head .sub { color: var(--text2); font-size: 13px; }
+.panel { background: var(--paper); border: 1px solid var(--divider); border-radius: 10px; }
+.empty { color: var(--text2); font-size: 13px; }
+#cards { display: flex; flex-direction: column; gap: 12px; }
+/* あなたの番のカード */
+.card { background: var(--paper); border: 1px solid var(--warning); border-radius: 10px; padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; }
+.card.stopped { border-color: var(--error); }
+.card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.badge { padding: 1px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--warning-bg); color: var(--warning-text); }
+.badge.stopped { background: var(--error-bg); color: var(--error-text); }
+.badge.ok { background: var(--success-bg); color: var(--success-text); font-weight: 500; }
+.badge.warn { background: var(--warning-bg); color: var(--warning-text); font-weight: 500; }
+.tid { font-family: var(--mono); font-weight: 600; white-space: nowrap; }
+.ttl { font-weight: 500; }
+.since { margin-left: auto; color: var(--text2); font-size: 12px; }
+.card p { margin: 0; }
+.box { background: var(--level1); border-radius: 8px; padding: 10px 14px; font-size: 13px; }
+.box .label { color: var(--text2); font-size: 12px; margin-bottom: 2px; }
+.box pre { margin: 4px 0 0; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.stat { background: var(--level1); border-radius: 8px; padding: 8px 12px; }
+.stat .k { color: var(--text2); font-size: 12px; }
+.stat .v { font-size: 18px; font-weight: 600; }
+.note { font-size: 13px; color: var(--text3); }
+.next { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; font-size: 13px; }
+.next .k { color: var(--text2); }
+.next code { background: var(--level1); padding: 2px 8px; border-radius: 6px; }
+.qbox { background: var(--level1); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.qbox .qh { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.qbox .qid { font-family: var(--mono); font-size: 12px; color: var(--text2); }
+.qbox ol { margin: 0; padding-left: 20px; font-size: 13px; }
+.qbox .why { font-size: 12px; color: var(--text2); }
+.qbox .body { font-size: 13px; white-space: pre-wrap; }
+/* 流れ */
+.flow { padding: 8px 16px 12px; overflow-x: auto; }
+.flow-inner { min-width: 900px; }
+.lane { display: grid; grid-template-columns: 250px minmax(0, 1fr) 180px; gap: 16px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--divider2); }
+.lane.head { padding: 8px 0; border-bottom: 1px solid var(--divider); color: var(--text2); font-size: 12px; }
+.lane.row { cursor: pointer; }
+.lane.row:hover { background: var(--level1); }
+.lane.row.sel { background: var(--level1); }
+.lane .who { display: flex; gap: 10px; align-items: baseline; min-width: 0; }
+.lane .who .ttl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.segs { display: flex; gap: 4px; }
+.segs > span { flex: 1 1 0; min-width: 0; text-align: center; }
+.seg { height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 12px; white-space: nowrap; }
+.seg.done { background: var(--done-bg); color: var(--done-text); border: 1px solid var(--done-bg); }
+.seg.run { background: var(--primary-bg); color: var(--primary-text); border: 1px solid var(--primary); font-weight: 600; }
+.seg.human { background: var(--warning-bg); color: var(--warning-text); border: 1px solid var(--warning); font-weight: 600; }
+.seg.stop { background: var(--error-bg); color: var(--error-text); border: 1px solid var(--error); font-weight: 600; }
+.seg.wait { background: transparent; color: var(--text2); border: 1px solid var(--divider); font-weight: 600; }
+.seg.todo { background: transparent; color: var(--todo); border: 1px dashed var(--divider); }
+.lane .state { font-size: 13px; display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.state.human { color: var(--warning-text); }
+.state.stop { color: var(--error-text); }
+.state.run { color: var(--primary-text); }
+.state.wait { color: var(--text2); }
+.role { padding: 0 8px; border-radius: 999px; font-size: 11px; background: var(--neutral-bg); color: var(--neutral-text); }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; padding-top: 10px; font-size: 12px; color: var(--text2); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+/* AI が作業中 */
+.runrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 12px 16px; }
+.runrow + .runrow { border-top: 1px solid var(--divider); }
+.runrow .what { color: var(--text3); }
+.runrow .why { margin-left: auto; color: var(--text2); font-size: 12px; }
+/* 詳細と本文 */
+.detail { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.detail h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--text2); }
+.src { margin: 0; padding: 0; list-style: none; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--divider2); }
+th { color: var(--text2); font-weight: 500; font-size: 12px; }
+td.t { color: var(--text2); white-space: nowrap; }
+.viewer pre { margin: 0; max-height: 480px; overflow: auto; font-family: var(--mono); font-size: 12px; line-height: 1.5; }
+.viewer .ln { display: block; padding: 0 12px; white-space: pre-wrap; word-break: break-all; }
+.viewer .ln b { display: inline-block; width: 44px; color: var(--text2); font-weight: 400; user-select: none; }
+.viewer .ln.hit { background: var(--warning-bg); }
+.viewer .vh { display: flex; gap: 12px; align-items: baseline; padding: 10px 16px; border-bottom: 1px solid var(--divider); }
+/* 最近終わったもの */
+.aside-box { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.aside-box h2 { font-size: 15px; }
+.recent { display: flex; flex-direction: column; gap: 2px; padding-bottom: 10px; border-bottom: 1px solid var(--divider2); }
+.recent:last-child { border-bottom: none; padding-bottom: 0; }
+.recent .l1 { display: flex; gap: 8px; align-items: baseline; }
+.recent .l1 .when { margin-left: auto; color: var(--text2); font-size: 12px; white-space: nowrap; }
+.recent .l2 { font-size: 12px; color: var(--text3); }
+.err { color: var(--error-text); }
 </style>
 </head>
 <body>
 <header>
-  <h1>gateflow monitor</h1>
+  <div class="brand"><h1>gateflow monitor</h1><span class="project" id="project"></span></div>
+  <div class="pills" id="pills"></div>
   <span class="meta" id="meta">読み込み中…</span>
 </header>
 <main>
-  <section>
-    <h2>人を待っているもの</h2>
-    <div class="card" id="waiting"></div>
-  </section>
-  <section>
-    <h2>実行中</h2>
-    <div id="running"></div>
-  </section>
-  <section id="errors-section" hidden>
-    <h2>読めなかったもの</h2>
-    <div class="card err" id="errors"></div>
-  </section>
+  <div class="col-main">
+    <section>
+      <div class="sec-head"><h2>あなたの番</h2><span class="sub">止まったもの、承認、質問の順。中身を読んで判断し、操作は今までどおりコマンドで行う</span></div>
+      <div id="cards"></div>
+    </section>
+    <section>
+      <div class="sec-head"><h2>流れ</h2><span class="sub">すべてのチケットが今どの段にいるか。×の数字はその段の往復の回数。行を選ぶと詳細を開く</span></div>
+      <div class="panel flow"><div class="flow-inner" id="flow"></div></div>
+    </section>
+    <section id="detail-sec" hidden>
+      <div class="sec-head"><h2 id="detail-title"></h2><a id="detail-close">閉じる</a></div>
+      <div class="panel detail" id="detail"></div>
+    </section>
+    <section id="viewer-sec" hidden>
+      <div class="panel viewer"><div class="vh"><span class="mono" id="viewer-path"></span><a id="viewer-close">閉じる</a></div><pre id="viewer"></pre></div>
+    </section>
+    <section>
+      <div class="sec-head"><h2>AI が作業中</h2><span class="sub">1行で順調かどうか</span></div>
+      <div id="running"></div>
+    </section>
+    <section id="errors-sec" hidden>
+      <div class="sec-head"><h2>読めなかったもの</h2></div>
+      <div class="panel aside-box err" id="errors"></div>
+    </section>
+  </div>
+  <aside>
+    <section class="panel aside-box">
+      <h2>最近終わったもの</h2>
+      <div id="recent"></div>
+    </section>
+  </aside>
 </main>
 <script>
 "use strict";
 // NOTE: 記録には AI が書いた文が入るので、innerHTML は使わず textContent で組み立てる
-function el(tag, attrs, ...children) {
+function el(tag, attrs, ...kids) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
-    if (k === "class") e.className = v; else e.setAttribute(k, v);
+    if (k === "onclick") e.addEventListener("click", v);
+    else if (v !== undefined && v !== null && v !== false) e.setAttribute(k, v);
   }
-  for (const c of children) {
-    if (c === null || c === undefined) continue;
-    e.append(c instanceof Node ? c : document.createTextNode(String(c)));
-  }
+  for (const k of kids) if (k !== null && k !== undefined && k !== false) e.append(k);
   return e;
 }
-const outcomeLabel = { gate: "関門", review: "レビュー待ち", stopped: "止まった", interrupted: "中断", runnable: "run を待つ", "nothing-to-do": "保留など", stuck: "進めない", "unknown-state": "遷移表にない状態", finished: "終わり" };
-function hms(t) { return t ? t.slice(11, 19) : ""; }
-function minutes(sec) { return Math.floor(sec / 60) + "分" + String(sec % 60).padStart(2, "0") + "秒"; }
+const $ = id => document.getElementById(id);
+let D = null;          // 遷移表の display（表示名）
+let selected = "";     // 詳細を開いているチケット
 
-function renderWaiting(list) {
-  const box = document.getElementById("waiting");
-  box.replaceChildren();
-  if (!list.length) { box.append(el("div", { class: "empty" }, "人を待っているチケットはない")); return; }
-  const tbody = el("tbody");
-  for (const w of list) {
-    const reason = el("td", {}, w.reason);
-    for (const warn of w.warnings || []) reason.append(el("div", { class: "err" }, warn));
-    tbody.append(el("tr", {},
-      el("td", { class: "mono nowrap" }, w.ticket),
-      el("td", {}, w.title),
-      el("td", { class: "nowrap" }, el("span", { class: "chip " + w.outcome }, outcomeLabel[w.outcome] || w.outcome), " ", el("span", { class: "mono" }, w.status)),
-      reason,
-      el("td", {}, el("code", {}, w.next || ""))));
-  }
-  box.append(el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, "チケット"), el("th", {}, "題名"), el("th", {}, "状態"), el("th", {}, "止まった理由"), el("th", {}, "次の操作"))), tbody));
+// 表示名は遷移表の display から引く（画面に直書きしない）
+const stageLabel = i => (D && D.stages[i]) ? D.stages[i].label : "";
+const stageName = i => (D && D.stages[i]) ? D.stages[i].name : "";
+const stageOfStep = s => D ? D.stages.findIndex(x => (x.steps || []).includes(s)) : -1;
+const roleName = r => (D && D.roles[r]) || r || "";
+const outcomeName = o => (D && D.outcomes[o]) || o || "";
+const stopName = s => (D && (D.stops[s] || D.outcomes[s])) || s || "";
+const stateName = s => (D && D.states[s]) || s || "";
+const commandName = c => (D && D.commands[c]) || c || "";
+
+// 時刻はブラウザの地方時
+const pad = n => String(n).padStart(2, "0");
+const hms = d => pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+function when(iso) {
+  if (!iso) return "";
+  const d = new Date(iso), now = new Date();
+  if (sameDay(d, now)) return pad(d.getHours()) + ":" + pad(d.getMinutes());
+  const y = new Date(now); y.setDate(now.getDate() - 1);
+  if (sameDay(d, y)) return "昨日";
+  return (d.getMonth() + 1) + "/" + d.getDate() + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+}
+function dur(sec) {
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  if (h) return h + "時間" + m + "分";
+  if (m) return m + "分" + (s ? s + "秒" : "");
+  return s + "秒";
+}
+// 作業履歴の時刻：今日なら時刻、それ以外は月日と時刻
+function stamp(iso) {
+  if (!iso) return "";
+  const d = new Date(iso), t = pad(d.getHours()) + ":" + pad(d.getMinutes());
+  return sameDay(d, new Date()) ? t : (d.getMonth() + 1) + "/" + d.getDate() + " " + t;
+}
+const since = iso => iso ? Math.max(0, Math.floor((Date.now() - new Date(iso)) / 60000)) : 0;
+function ago(iso) {
+  const m = since(iso);
+  return m < 60 ? m + "分前から待っている" : Math.floor(m / 60) + "時間" + (m % 60) + "分前から待っている";
 }
 
-function renderRunning(list) {
-  const box = document.getElementById("running");
+// リンクの文言
+const linkText = { ticket: "指示書を開く", questions: "質問をすべて開く", "verify-log": "検証の記録を開く", diff: "差分を開く", "catalog-diff": "カタログの差分を開く", review: "レビュー報告" };
+function linkEl(l, text, line) {
+  return el("a", { onclick: () => openSource(l.path, line) }, text || linkText[l.kind] || l.path);
+}
+
+function nextRow(next, links, labels) {
+  const row = el("div", { class: "next" });
+  if (next) row.append(el("span", { class: "k" }, "次の操作"), el("code", {}, next));
+  for (const l of links || []) row.append(linkEl(l, (labels || {})[l.kind]));
+  return row;
+}
+
+function cardHead(badge, cls, c) {
+  return el("div", { class: "card-head" }, el("span", { class: "badge " + cls }, badge),
+    el("span", { class: "tid" }, c.ticket), el("span", { class: "ttl" }, c.title),
+    c.since ? el("span", { class: "since" }, ago(c.since)) : null);
+}
+
+function renderCard(c) {
+  if (c.kind === "stopped") {
+    const card = el("article", { class: "card stopped" }, cardHead("止まった", "stopped", c));
+    const where = c.step ? stageName(stageOfStep(c.step)) + "（" + c.iteration + "回目）で" : "";
+    card.append(el("p", {}, where + "止まった：" + stopName(c.reason) + (c.detail ? "。" + c.detail : "")));
+    if (c.failure) {
+      const box = el("div", { class: "box" }, el("div", { class: "label" }, "失敗したテスト"));
+      box.append(el("div", {}, ...c.failure.tests.flatMap((t, i) => [i ? "、" : "", el("code", {}, t)])));
+      if (c.failure.lines.length) box.append(el("pre", {}, c.failure.lines.join("\n")));
+      card.append(box);
+    }
+    if (c.denied && c.denied.length) {
+      card.append(el("div", { class: "box" }, el("div", { class: "label" }, "外への接続の拒否"),
+        el("div", {}, c.denied.map(d => d.host + "：" + d.count + "件").join("、"))));
+    }
+    card.append(nextRow(c.next, c.links));
+    return card;
+  }
+  if (c.kind === "approve") {
+    const a = c.approve;
+    const card = el("article", { class: "card" }, cardHead("承認待ち", "", c));
+    card.append(el("p", {}, "計画ができた。§3・§4 とカタログの差分を確かめて承認する。"));
+    const stat = (k, v) => el("div", { class: "stat" }, el("div", { class: "k" }, k), el("div", { class: "v" }, String(v)));
+    const diff = !a.hasDiff ? "—" : (a.diffDel ? "+" + a.diffAdd + " −" + a.diffDel + " 行" : "+" + a.diffAdd + " 行");
+    card.append(el("div", { class: "stats" }, stat("受入条件", a.acceptance), stat("テスト", a.testCases), stat("更新する文書", a.sheets), stat("カタログの差分", diff)));
+    if (a.imo) {
+      card.append(el("div", { class: "note" }, a.imoPlanned === a.imo
+        ? "要件の審査からの申し送り（IMO）" + a.imo + "件は、すべて計画に入っている。"
+        : "要件の審査からの申し送り（IMO）" + a.imo + "件のうち、" + a.imoPlanned + "件を計画に入れ、" + (a.imo - a.imoPlanned) + "件は理由を付けて見送った。"));
+    }
+    card.append(nextRow(c.next, c.links, { ticket: "§3・§4 を開く" }));
+    return card;
+  }
+  if (c.kind === "questions") {
+    const q = c.questions;
+    const card = el("article", { class: "card" }, cardHead("質問 " + q.count + "件", "", c));
+    if (c.step) card.append(el("p", {}, stageName(stageOfStep(c.step)) + "で差し戻し（" + c.iteration + "回目）。"));
+    if (q.first) {
+      const f = q.first;
+      const box = el("div", { class: "qbox" }, el("div", { class: "qh" }, el("span", { class: "qid" }, f.id), el("span", { class: "ttl" }, f.title)));
+      if (f.body) box.append(el("div", { class: "body" }, f.body));
+      if (f.options.length) box.append(el("ol", {}, ...f.options.map(o => el("li", {}, o))));
+      if (f.recommend) box.append(el("div", { class: "why" }, "推奨・提案：" + f.recommend));
+      card.append(box);
+    }
+    if (q.others.length) card.append(el("div", { class: "note" }, "ほかに" + q.others.length + "件：" + q.others.map(o => o.id + " " + o.title).join("、")));
+    card.append(nextRow(c.next, c.links, { ticket: "指示書を開く" }));
+    return card;
+  }
+  const card = el("article", { class: "card" }, cardHead(stateName(c.status), "", c));
+  if (c.reason === "unknown-state") card.append(el("p", {}, "遷移表にない状態（" + c.detail + "）"));
+  else if (c.detail) card.append(el("p", {}, c.detail));
+  card.append(nextRow(c.next, c.links));
+  return card;
+}
+
+function laneNote(l) {
+  const text = {
+    run: () => stageName(l.current) + "中・" + since(l.started) + "分",
+    stopped: () => "止まった（" + stopName(l.reason) + "）",
+    approve: () => "承認を待っている",
+    questions: () => "質問 " + l.count + "件",
+    review: () => "レビューを待っている",
+    "wait-ready": () => "ready を待っている",
+    "wait-run": () => "gateflow run を待っている",
+    held: () => "保留",
+    other: () => stateName(l.status),
+  }[l.note];
+  const tone = l.group === "run" ? "run" : l.note === "stopped" ? "stop" : l.group === "wait" ? "wait" : "human";
+  return el("span", { class: "state " + tone }, l.role ? el("span", { class: "role" }, roleName(l.role)) : null, text ? text() : "");
+}
+
+function renderFlow(lanes) {
+  const box = $("flow");
   box.replaceChildren();
-  if (!list.length) { box.append(el("div", { class: "card empty" }, "実行中のチケットはない")); return; }
+  const head = el("div", { class: "lane head" }, el("span", {}, "チケット"),
+    el("div", { class: "segs" }, ...D.stages.map(s => el("span", {}, s.label))), el("span", {}, "担当といまの様子"));
+  box.append(head);
+  if (!lanes.length) box.append(el("div", { class: "empty", style: "padding:10px 0" }, "動いているチケットはない（done・cancelled は出さない）"));
+  for (const l of lanes) {
+    const segs = el("div", { class: "segs" });
+    l.segments.forEach((s, i) => {
+      const mark = s.count >= 2 ? "×" + s.count : s.kind === "done" ? "✓" : s.kind !== "todo" ? "●" : "";
+      segs.append(el("span", { class: "seg " + s.kind, title: D.stages[i].name + (s.count ? "：" + s.count + "回" : "") }, mark));
+    });
+    box.append(el("div", { class: "lane row" + (l.ticket === selected ? " sel" : ""), onclick: () => openDetail(l.ticket) },
+      el("div", { class: "who" }, el("span", { class: "tid" }, l.ticket), el("span", { class: "ttl" }, l.title)), segs, laneNote(l)));
+  }
+  const legend = el("div", { class: "legend" });
+  for (const [cls, t] of [["run", "AI が作業中"], ["human", "あなたの番"], ["stop", "止まった"], ["wait", "待機"], ["done", "済んだ段"]]) {
+    legend.append(el("span", {}, el("i", { class: "seg " + cls, style: "height:10px" }), t));
+  }
+  box.append(legend);
+}
+
+function renderRunning(rows) {
+  const box = $("running");
+  box.replaceChildren();
+  if (!rows.length) { box.append(el("div", { class: "empty" }, "なし")); return; }
+  const panel = el("div", { class: "panel" });
+  for (const r of rows) {
+    const elapsed = r.started ? dur((Date.now() - new Date(r.started)) / 1000) : "";
+    const warn = [];
+    if (r.invalid) warn.push("出力の不正 " + r.invalid + "回");
+    if (r.denied) warn.push("外への接続の拒否 " + r.denied + "件");
+    panel.append(el("div", { class: "runrow" }, el("span", { class: "tid" }, r.ticket), el("span", { class: "ttl" }, r.title),
+      el("span", { class: "what" }, stageName(r.stage) + "・" + r.iteration + "回目・" + elapsed),
+      el("span", { class: "role" }, roleName(r.role)),
+      el("span", { class: "badge " + (warn.length ? "warn" : "ok") }, warn.length ? "注意" : "順調"),
+      warn.length ? el("span", { class: "why" }, warn.join("、")) : null));
+  }
+  box.append(panel);
+}
+
+function renderRecent(list) {
+  const box = $("recent");
+  box.replaceChildren();
+  if (!list.length) { box.append(el("div", { class: "empty" }, "まだない")); return; }
   for (const r of list) {
-    const runSec = r.limits.runMinutes * 60;
-    const elapsed = el("b", { class: r.stepSeconds > runSec ? "over" : "" }, minutes(r.stepSeconds));
-    const loops = Object.entries(r.loops).map(([k, v]) => k + " " + v + "/" + r.limits.loops).join("、") || "なし";
-    const head = el("div", { class: "run-head" },
-      el("span", { class: "id mono" }, r.ticket), el("span", {}, r.title),
-      el("span", { class: "kv" }, "step ", el("b", {}, r.step), "（", r.stepNo, " 番目、試行 ", el("b", {}, r.attempt), "）"),
-      el("span", { class: "kv" }, "経過 ", elapsed, "（上限：1回 " + r.limits.runMinutes + "分、無反応 " + r.limits.idleMinutes + "分）"),
-      el("span", { class: "kv" }, "step の数 ", el("b", {}, r.steps + "/" + r.limits.steps)),
-      el("span", { class: "kv" }, "往復 ", el("b", {}, loops)));
-    const events = el("ul");
-    for (const e of r.events.slice().reverse()) events.append(el("li", { class: e.alert ? "alert" : "" }, el("span", { class: "t mono" }, hms(e.time)), e.event + "：" + e.text));
-    const tools = el("ul");
-    for (const t of r.tools) tools.append(el("li", {}, el("b", {}, t.name), " ", el("span", { class: "mono" }, t.target)));
-    if (!r.tools.length) tools.append(el("li", { class: "empty" }, "まだない"));
-    const denied = el("ul");
-    for (const d of r.denied) denied.append(el("li", { class: "alert" }, d.host + "：" + d.count + " 件"));
-    if (!r.denied.length) denied.append(el("li", { class: "empty" }, "なし"));
-    box.append(el("div", { class: "card" }, head,
-      el("div", { class: "cols" },
-        el("div", {}, el("h3", {}, "直近のイベント（新しい順）"), events),
-        el("div", {}, el("h3", {}, "エージェントの直近のツール呼び出し"), tools, el("h3", {}, "プロキシの拒否"), denied))));
+    box.append(el("div", { class: "recent", style: "cursor:pointer", title: "詳細を開く", onclick: () => openDetail(r.ticket) },
+      el("div", { class: "l1" }, el("span", { class: "tid" }, r.ticket), el("span", {}, r.title), el("span", { class: "when" }, when(r.doneAt))),
+      el("div", { class: "l2" }, "所要 " + dur(r.seconds) + "・" + stageName(stageOfStep("p2-review")) + " " + r.specReviews + "回・あなたの判断 " + r.humanDecided + "件")));
   }
 }
+
+function renderHeader(st) {
+  $("project").textContent = st.project;
+  const today = new Date();
+  const doneToday = st.doneTimes.filter(t => sameDay(new Date(t), today)).length;
+  const waiting = st.lanes.filter(l => l.group === "wait").length;
+  $("pills").replaceChildren(
+    el("span", { class: "pill human" }, "あなたの番 " + st.cards.length),
+    el("span", { class: "pill run" }, "実行中 " + st.running.length),
+    el("span", { class: "pill" }, "待機 " + waiting),
+    el("span", { class: "pill done" }, "今日の完了 " + doneToday));
+  $("meta").textContent = hms(new Date()) + " 更新（2秒ごと）";
+}
+
+// チケットの詳細：正本と作業履歴
+async function openDetail(id) {
+  selected = id;
+  if (location.hash !== "#" + id) history.replaceState(null, "", "#" + id);
+  const res = await fetch("/api/ticket?id=" + encodeURIComponent(id), { cache: "no-store" });
+  const sec = $("detail-sec"), box = $("detail");
+  sec.hidden = false;
+  box.replaceChildren();
+  if (!res.ok) { box.append(el("div", { class: "err" }, "読み込めない：" + (await res.text()))); return; }
+  const d = await res.json();
+  $("detail-title").textContent = d.ticket + "　" + d.title;
+  const src = el("ul", { class: "src" });
+  for (const s of d.sources) {
+    if (s.kind === "ticket") src.append(el("li", {}, linkEl(s, "指示書（ticket.md）")));
+    else if (s.kind === "missing") src.append(el("li", {}, el("code", {}, s.id), "：定義が見つからない"));
+    else src.append(el("li", {}, el("code", {}, s.id), "　", linkEl(s, s.path + (s.line ? ":" + s.line : "") + (s.kind === "detail" ? "（詳細）" : ""), s.line)));
+  }
+  box.append(el("h3", {}, "正本"), src);
+  const tb = el("tbody");
+  for (const h of d.history) {
+    let result;
+    if (h.command) result = commandName(h.command) + "（" + stateName(h.from) + " → " + stateName(h.to) + "）";
+    else if (h.running) result = "作業中";
+    else {
+      const parts = [];
+      if (h.outcome) parts.push(outcomeName(h.outcome));
+      if (h.findings) parts.push(Object.entries(h.findings).map(([k, v]) => k + " " + v).join("・"));
+      if (h.invalid) parts.push("出力の不正 " + h.invalid + "回");
+      if (h.stop && h.stop !== h.outcome) parts.push("止まった：" + stopName(h.stop));
+      result = parts.join("、");
+    }
+    const refs = el("td", {}, ...(h.links || []).map((l, i) => el("span", {}, i ? "、" : "", linkEl(l, (linkText[l.kind] || l.kind) + (h.inferred && l.kind === "review" ? "（推定）" : "")))));
+    const stage = h.stage >= 0 ? stageName(h.stage) + (h.iteration ? "・" + h.iteration + "回目" : "") : "";
+    tb.append(el("tr", {}, el("td", { class: "t" }, stamp(h.time)), el("td", {}, stage), el("td", {}, roleName(h.role)), el("td", {}, result),
+      el("td", { class: "t" }, h.seconds ? dur(h.seconds) : ""), refs));
+  }
+  const table = el("table", {}, el("thead", {}, el("tr", {}, ...["いつ", "段", "担当", "結果", "かかった時間", "参照"].map(t => el("th", {}, t)))), tb);
+  box.append(el("h3", {}, "作業履歴（新しい順）"), d.history.length ? table : el("div", { class: "empty" }, "まだない"));
+  sec.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// ファイルの本文（読むだけ）。行番号を付け、対象の行へ移る
+async function openSource(path, line) {
+  const res = await fetch("/api/source?path=" + encodeURIComponent(path), { cache: "no-store" });
+  const sec = $("viewer-sec"), pre = $("viewer");
+  sec.hidden = false;
+  $("viewer-path").textContent = path + (line ? ":" + line : "");
+  pre.replaceChildren();
+  if (!res.ok) { pre.append(el("span", { class: "ln err" }, "読み込めない：" + (await res.text()))); return; }
+  const f = await res.json();
+  let hit = null;
+  f.lines.forEach((t, i) => {
+    const ln = el("span", { class: "ln" + (i + 1 === line ? " hit" : "") }, el("b", {}, String(i + 1)), t);
+    if (i + 1 === line) hit = ln;
+    pre.append(ln);
+  });
+  sec.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (hit) pre.scrollTop = Math.max(0, hit.offsetTop - pre.offsetTop - 80);
+}
+
+$("detail-close").addEventListener("click", () => { $("detail-sec").hidden = true; selected = ""; history.replaceState(null, "", location.pathname); });
+$("viewer-close").addEventListener("click", () => { $("viewer-sec").hidden = true; });
 
 async function refresh() {
-  const meta = document.getElementById("meta");
   try {
     const res = await fetch("/api/status", { cache: "no-store" });
-    if (!res.ok) throw new Error(res.status + " " + (await res.text()));
+    if (!res.ok) throw new Error(await res.text());
     const st = await res.json();
-    meta.textContent = st.project + "　更新 " + hms(st.time) + "Z（2秒ごと）";
-    renderWaiting(st.waiting);
+    D = st.display;
+    renderHeader(st);
+    const cards = $("cards");
+    cards.replaceChildren(...st.cards.map(renderCard));
+    if (!st.cards.length) cards.append(el("div", { class: "empty" }, "いまはない"));
+    renderFlow(st.lanes);
     renderRunning(st.running);
-    const errs = st.errors || [];
-    document.getElementById("errors-section").hidden = !errs.length;
-    document.getElementById("errors").replaceChildren(...errs.map(x => el("div", {}, x)));
+    renderRecent(st.recent);
+    $("errors-sec").hidden = !(st.errors && st.errors.length);
+    $("errors").replaceChildren(...(st.errors || []).map(e => el("div", {}, e)));
   } catch (e) {
-    meta.textContent = "読み込めない：" + e.message;
+    $("meta").textContent = "読み込めない：" + e.message;
   }
 }
-refresh();
+refresh().then(() => {
+  // URL の #T-NNN で、そのチケットの詳細を開く（チケットへの直接のリンク）
+  const m = location.hash.match(/^#(T-[0-9]{3,})$/);
+  if (m) openDetail(m[1]);
+});
 setInterval(refresh, 2000);
 </script>
 </body>

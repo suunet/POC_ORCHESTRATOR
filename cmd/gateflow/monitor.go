@@ -72,7 +72,7 @@ func newMonitorServer(args []string, stderr io.Writer) (*http.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	m := &monitor.Monitor{Dir: filepath.Join(root, ticket.Dir), Project: project, Workflow: wf, Now: time.Now,
+	m := &monitor.Monitor{Dir: filepath.Join(root, ticket.Dir), Root: root, Project: project, Workflow: wf, Now: time.Now,
 		Alive: func(r ticket.Running) bool { return r.Alive() }}
 	return &http.Server{
 		Addr:              net.JoinHostPort("127.0.0.1", strconv.Itoa(*port)),

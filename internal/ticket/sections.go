@@ -406,3 +406,33 @@ func (t *Ticket) IssueID() string {
 	}
 	return ""
 }
+
+// tableRows は、節 head の中で、見出しの行が header で始まる表のデータの行（セル）を返す（ひな形の行は除く）。
+func (t *Ticket) tableRows(head, header string) [][]string {
+	var rows [][]string
+	in := false
+	for _, l := range sectionLines(t.Body, head) {
+		s := strings.TrimSpace(l)
+		switch {
+		case !strings.HasPrefix(s, "|"):
+			in = false
+		case strings.HasPrefix(s, header):
+			in = true
+		case in && !strings.HasPrefix(s, "| ---") && hasContent([]string{s}):
+			rows = append(rows, splitRow(s))
+		}
+	}
+	return rows
+}
+
+// AcceptanceCount・SheetCount は、§4.2 の受入条件・§4.4 の更新する文書の数（監視の UI。M2.8）。
+func (t *Ticket) AcceptanceCount() int {
+	return len(t.tableRows(headAcceptance, "| 受入条件 | ユースケース |"))
+}
+
+func (t *Ticket) SheetCount() int {
+	return len(t.tableRows(headSheets, "| ファイル | 更新の内容 |"))
+}
+
+// IMOResponses は、§4.1 の末尾の P2 の IMO への対応の表の行（IMO・対応・内容）を返す。
+func (t *Ticket) IMOResponses() [][]string { return t.tableRows(headPlan, "| IMO | 対応 |") }
