@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -121,9 +122,19 @@ elif [ "$st" = clean ] && [ "$MERGEMAIN" = 1 ]; then
 else
   mode=behind
 fi
+# 取り込まれていないコミットの並び（プロジェクトの作業ブランチの先頭、なければ main から h0 まで）。続いていなければ x
+base=$m
+[ "$HOSTBRANCH" = 1 ] && [ "$created" = 0 ] && base=$b
+if git merge-base --is-ancestor "$base" "$h0"; then
+  pend=$(git rev-list --reverse "$base..$h0" | tr '\n' ',')
+  pend=${pend%,}
+  [ -n "$pend" ] || pend=-
+else
+  pend=x
+fi
 kind=exists
 [ "$created" = 1 ] && kind=created
-echo "$kind $h0 $(git rev-parse HEAD) $st $m $mode $synced"
+echo "$kind $h0 $(git rev-parse HEAD) $st $m $mode $synced $pend"
 `
 
 // Prepared は、clone の用意の結果。Main は使った main のハッシュ、Head は用意した後の作業ブランチの先頭。
@@ -142,9 +153,12 @@ type Prepared struct {
 
 // PrepareOptions は、clone の用意の選び方。MergeMain は、作業ブランチに自分のコミットがあっても、main の進みを
 // マージする（P2 の段階。M2.6 の Q-01）。Author は、マージのコミットの名義。
+// Own は、resume のとき、止まった実行で gateflow がコミットした順（最後が先頭のはず）。取り込まれていない
+// コミットが、これと一致するときだけ止めずに続ける（M2.7）。取り込みは今までどおり呼び出し側が承認の後に行う。
 type PrepareOptions struct {
 	MergeMain bool
 	Author    Author
+	Own       []string
 }
 
 // Prepare は、チケットの clone を用意する。clone がなければ main から作り、あれば使い回す。
@@ -173,7 +187,7 @@ func (w *Workspace) Prepare(ctx context.Context, ticketID, branch, mainBranch st
 	if err := w.run(ctx, spec, &out); err != nil {
 		return Prepared{}, fmt.Errorf("clone を用意できない: %w", err)
 	}
-	p, err := w.checkClone(ctx, ticketID, strings.TrimSpace(out.String()))
+	p, err := w.checkClone(ctx, ticketID, strings.TrimSpace(out.String()), opt.Own)
 	if err != nil {
 		return Prepared{}, err
 	}
@@ -200,17 +214,19 @@ func (w *Workspace) Prepare(ctx context.Context, ticketID, branch, mainBranch st
 	return p, nil
 }
 
-func (w *Workspace) checkClone(ctx context.Context, ticketID, line string) (Prepared, error) {
+func (w *Workspace) checkClone(ctx context.Context, ticketID, line string, own []string) (Prepared, error) {
 	f := strings.Fields(line)
-	if len(f) != 7 || (f[0] != "created" && f[0] != "exists") {
+	if len(f) != 8 || (f[0] != "created" && f[0] != "exists") {
 		return Prepared{}, fmt.Errorf("clone の用意の出力を読めない: %q", line)
 	}
-	h0, head, state, main, mode, synced := f[1], f[2], f[3], f[4], f[5], f[6]
+	h0, head, state, main, mode, synced, pend := f[1], f[2], f[3], f[4], f[5], f[6], f[7]
 	if state != "clean" {
 		return Prepared{}, fmt.Errorf("%s の clone に、取り込まれていない変更（コミットしていない変更）がある。確かめてから clone を消すか取り込む", ticketID)
 	}
 	if _, err := w.git(ctx, "cat-file", "-e", h0+"^{commit}"); err != nil {
-		return Prepared{}, fmt.Errorf("%s の clone に、プロジェクトに取り込まれていないコミット %s がある。確かめてから clone を消すか取り込む", ticketID, h0)
+		if err := OwnPending(h0, pend, own); err != nil {
+			return Prepared{}, fmt.Errorf("%s の clone に、プロジェクトに取り込まれていないコミット %s がある（%v）。確かめてから clone を消すか取り込む", ticketID, h0, err)
+		}
 	}
 	switch mode {
 	case "current", "forwarded", "behind", "merged":
@@ -220,6 +236,26 @@ func (w *Workspace) checkClone(ctx context.Context, ticketID, line string) (Prep
 		return Prepared{}, fmt.Errorf("clone の用意の出力を読めない: %q", line)
 	}
 	return Prepared{Main: main, Head: head, Forwarded: mode == "forwarded", Behind: mode == "behind", Merged: mode == "merged", Synced: synced == "1"}, nil
+}
+
+// OwnPending は、clone の取り込まれていないコミットを、gateflow 自身のコミットとして通してよいかを確かめる（M2.7）。
+// 通すのは、clone の先頭 h0 が、止まった実行で gateflow が最後にコミットしたと記録したもの（own の最後）と一致し、
+// 作業ブランチの先頭から h0 までのコミット（pend。カンマ区切り、続いていなければ x）がすべて own にあるときだけ。
+func OwnPending(h0, pend string, own []string) error {
+	switch {
+	case len(own) == 0:
+		return errors.New("gateflow がコミットした記録がない")
+	case h0 != own[len(own)-1]:
+		return fmt.Errorf("先頭が、gateflow が最後にコミットしたと記録したもの（%.7s）と違う", own[len(own)-1])
+	case pend == "x" || pend == "-":
+		return errors.New("作業ブランチの先頭から続いていない")
+	}
+	for _, c := range strings.Split(pend, ",") {
+		if !slices.Contains(own, c) {
+			return fmt.Errorf("途中に、gateflow の記録にないコミット %.7s が挟まっている", c)
+		}
+	}
+	return nil
 }
 
 // AgentMounts は、エージェントのコンテナのマウントを返す。.git と依存のキャッシュは読み取り専用。

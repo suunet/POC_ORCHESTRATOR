@@ -108,10 +108,14 @@ type flowWorkspace struct {
 	workChangesOnce bool
 	snapshots       int
 	resets          int
+	prepareErr      error // あれば Prepare が返す（clone の用意の失敗）
 }
 
 func (w *flowWorkspace) Prepare(_ context.Context, _, _, _ string, _ *config.Deps, opt workspace.PrepareOptions) (workspace.Prepared, error) {
 	w.prepareOpts = append(w.prepareOpts, opt)
+	if w.prepareErr != nil {
+		return workspace.Prepared{}, w.prepareErr
+	}
 	return w.prepared, nil
 }
 func (w *flowWorkspace) Snapshot(_ context.Context, _, dest string) error {

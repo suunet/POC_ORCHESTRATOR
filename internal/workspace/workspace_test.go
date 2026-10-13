@@ -93,7 +93,7 @@ func mountFor(spec container.Spec, target string) (container.Mount, bool) {
 func TestPrepare_NewClone(t *testing.T) {
 	project := newRepo(t)
 	main := git(t, project, "rev-parse", "main")
-	r := &fakeRunner{replies: []reply{{stdout: []byte("created " + main + " " + main + " clean " + main + " current 0\n")}, {}}}
+	r := &fakeRunner{replies: []reply{{stdout: []byte("created " + main + " " + main + " clean " + main + " current 0 -\n")}, {}}}
 	ws := newWorkspace(t, project, r)
 
 	deps := &config.Deps{Command: "go mod download", CacheEnv: "GOMODCACHE"}
@@ -145,7 +145,7 @@ func TestPrepare_NewClone(t *testing.T) {
 func TestPrepare_NoDeps(t *testing.T) {
 	project := newRepo(t)
 	main := git(t, project, "rev-parse", "main")
-	r := &fakeRunner{replies: []reply{{stdout: []byte("created " + main + " " + main + " clean " + main + " current 0\n")}}}
+	r := &fakeRunner{replies: []reply{{stdout: []byte("created " + main + " " + main + " clean " + main + " current 0 -\n")}}}
 	if _, err := newWorkspace(t, project, r).Prepare(context.Background(), "T-001", "feature/x", "main", nil, workspace.PrepareOptions{}); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestPrepare_ExistingClone(t *testing.T) {
 	project := newRepo(t)
 	main := git(t, project, "rev-parse", "main")
 	line := func(h0, head, st, mode, synced string) string {
-		return strings.Join([]string{"exists", h0, head, st, main, mode, synced}, " ") + "\n"
+		return strings.Join([]string{"exists", h0, head, st, main, mode, synced, "-"}, " ") + "\n"
 	}
 	cases := []struct {
 		name    string
@@ -199,6 +199,49 @@ func TestPrepare_ExistingClone(t *testing.T) {
 				t.Errorf("got %+v, want %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+// resume で、clone に取り込まれていないコミットがあるとき（M2.7）。止まった実行で gateflow が最後にコミットした
+// と記録したものと先頭が一致し、作業ブランチの先頭からの並びがすべて gateflow の記録にあるときだけ続ける。
+func TestPrepare_ResumeOwnCommit(t *testing.T) {
+	project := newRepo(t)
+	main := git(t, project, "rev-parse", "main")
+	own1 := "1111111111111111111111111111111111111111"
+	own2 := "2222222222222222222222222222222222222222"
+	other := "3333333333333333333333333333333333333333"
+	line := func(h0, pend string) string {
+		return strings.Join([]string{"exists", h0, h0, "clean", main, "current", "0", pend}, " ") + "\n"
+	}
+	cases := []struct {
+		name, stdout string
+		own          []string
+		wantErr      string
+	}{
+		{"記録と一致すれば続ける", line(own2, own1+","+own2), []string{own1, own2}, ""},
+		{"記録がなければ止める（resume でない実行）", line(own2, own2), nil, "記録がない"},
+		{"記録と違う先頭なら止める", line(other, other), []string{own1, own2}, "最後にコミットしたと記録したもの"},
+		{"記録にないコミットが途中に挟まっていれば止める", line(own2, other+","+own2), []string{own1, own2}, "記録にないコミット 3333333"},
+		{"作業ブランチの先頭から続いていなければ止める", line(own2, "x"), []string{own1, own2}, "続いていない"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &fakeRunner{replies: []reply{{stdout: []byte(tc.stdout)}}}
+			got, err := newWorkspace(t, project, r).Prepare(context.Background(), "T-001", "feature/x", "main", nil, workspace.PrepareOptions{Own: tc.own})
+			if tc.wantErr == "" {
+				if err != nil || got.Head != own2 {
+					t.Fatalf("Prepare: %v, %+v", err, got)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) || !strings.Contains(err.Error(), "取り込まれていない") {
+				t.Fatalf("err = %v, want %q", err, tc.wantErr)
+			}
+		})
+	}
+	// 作業ブランチ（プロジェクト側）は変えない：Prepare はプロジェクトのリポジトリに書き込まない
+	if got := git(t, project, "rev-parse", "main"); got != main {
+		t.Errorf("プロジェクトの main が変わった: %s", got)
 	}
 }
 

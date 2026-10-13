@@ -108,6 +108,7 @@ func (e *Engine) commit(ctx context.Context, st *State, step string) error {
 		return err
 	}
 	st.Commit = hash
+	st.Commits = append(st.Commits, hash)
 	e.log("commit", map[string]any{"message": msg, "commit": hash, "changed": changed})
 	return nil
 }

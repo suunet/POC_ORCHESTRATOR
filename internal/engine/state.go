@@ -28,7 +28,10 @@ type State struct {
 	DevResult string            `json:"devResult,omitempty"` // 最後の P5 の result.json（P5後に渡す）
 	VerifyLog string            `json:"verifyLog,omitempty"` // 最後の検証の出力（P5後に渡す）
 	Commit    string            `json:"commit,omitempty"`    // 最後のコミット
-	Review    string            `json:"review,omitempty"`    // 最後の P2 の result.json（ARB に渡す。M2.6）
+	// Commits は、この実行で gateflow がコミットした順。resume のとき、clone の取り込まれていないコミットが
+	// gateflow 自身のものかを確かめるのに使う（M2.7）
+	Commits []string `json:"commits,omitempty"`
+	Review  string   `json:"review,omitempty"` // 最後の P2 の result.json（ARB に渡す。M2.6）
 	// ArbDecided は、直前の ARB が裁定した指摘の指紋。次の P2 で同じ指摘が残ったら、ARB に裁定させず人へ回す（M2.6）
 	ArbDecided []string `json:"arbDecided,omitempty"`
 	Status     string   `json:"status"` // gateflow が最後に書いたステータス（手での書き換えの検出用）

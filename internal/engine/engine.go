@@ -223,7 +223,10 @@ func (e *Engine) Resume(ctx context.Context) (Result, error) {
 		return Result{}, err
 	}
 	st := &State{Ticket: e.Ticket.ID, Workflow: e.Workflow.Name, Loops: map[string]int{}, Prints: map[string]string{},
-		Status: prev.Status, Feedback: prev.Feedback}
+		Status: prev.Status, Feedback: prev.Feedback, Commit: prev.Commit, Commits: prev.Commits}
+	if len(st.Commits) == 0 && st.Commit != "" { // Commits を記録する前の実行（M2.7 より前）
+		st.Commits = []string{st.Commit}
+	}
 	return e.loop(ctx, st, prev.Resume)
 }
 
@@ -324,6 +327,9 @@ func (e *Engine) loop(ctx context.Context, st *State, step string) (Result, erro
 		e.log("error", map[string]any{"error": err.Error()})
 		st.Stopped = &Stop{Reason: "error", Detail: err.Error()}
 		st.Resume = st.Step
+		if st.Resume == "" { // step を始める前（clone の用意など）の失敗は、同じ step から再開する
+			st.Resume = step
+		}
 		st.Save(run.Dir)
 		return res, err
 	}
@@ -340,7 +346,7 @@ func (e *Engine) loopIn(ctx context.Context, run *ticket.Run, st *State, step st
 	// P2 の段階では、作業ブランチに自分のコミット（ARB と人の決定）があっても main の進みをマージする（M2.6 の Q-01）
 	mergeMain := slices.Contains([]string{string(ticket.Draft), string(ticket.ReadyToPrepare)}, st.Status)
 	prep, err := e.Workspace.Prepare(ctx, e.Ticket.ID, e.Ticket.Branch, e.Project.Branch.Main, e.Project.Deps,
-		workspace.PrepareOptions{MergeMain: mergeMain, Author: e.Author})
+		workspace.PrepareOptions{MergeMain: mergeMain, Author: e.Author, Own: st.Commits})
 	if err != nil {
 		return Result{}, err
 	}

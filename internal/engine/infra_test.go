@@ -1,6 +1,8 @@
 package engine_test
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -86,5 +88,53 @@ func TestRun_P2IMOToP3(t *testing.T) {
 	f.reload(t)
 	if !strings.Contains(f.e.Ticket.Body, "| COPY は名指しにする | 計画に入れた | §4.1 の Dockerfile の方針 |") {
 		t.Errorf("§4.1 に IMO への対応がない:\n%s", f.e.Ticket.Body)
+	}
+}
+
+// P5 後の BJ が人の確認待ち（Q）で止めたとき：P5 のコミットは作業ブランチへ取り込まない。resume は、止まった実行で
+// gateflow がコミットした記録を clone の検査に渡し、P5 後の BJ からやり直す。取り込むのは承認の後だけ（M2.7）。
+func TestResume_AfterP5VerifyNeedsHuman(t *testing.T) {
+	vQ := `{"outcome": "needs_human", "summary": "人の判断が要る", "findings": [{"label": "Q", "finding": "手順の文言", "evidence": {"file": "backend/log.go", "line": 1}}]}`
+	approved := strings.ReplaceAll(strings.Replace(infraTicket, "ステータス: ready-to-prepare", "ステータス: ready-to-implement", 1), "- [ ]", "- [x]")
+	f := newFlow(t, approved, map[string][]string{"p5": {`{"outcome": "done", "summary": "s"}`}, "p5-verify": {vQ, vApproved}})
+	res := mustRun(t, f)
+	if res.Outcome != engine.Stopped || res.Reason != "needs_human" {
+		t.Fatalf("res = %+v", res)
+	}
+	if len(f.ws.imports) != 0 {
+		t.Fatalf("BJ の承認の前に作業ブランチへ取り込んだ: %v", f.ws.imports)
+	}
+	f.reload(t)
+	res, err := f.e.Resume(context.Background())
+	if err != nil || f.status(t) != ticket.ReadyForReview {
+		t.Fatalf("resume: %v, %+v, status %s", err, res, f.status(t))
+	}
+	last := f.ws.prepareOpts[len(f.ws.prepareOpts)-1]
+	if len(last.Own) != 1 || last.Own[0] != "c1" {
+		t.Errorf("resume の clone の検査に渡した記録 = %v, want [c1]", last.Own)
+	}
+	if len(f.ws.imports) != 1 || f.runner.calls["p5"] != 1 {
+		t.Errorf("取り込み %v、P5 の呼び出し %d（承認の後に1回だけ取り込み、P5 はやり直さない）", f.ws.imports, f.runner.calls["p5"])
+	}
+}
+
+// clone の用意で失敗した実行も、同じ step から再開できる（step を始める前の失敗）。
+func TestResume_AfterPrepareError(t *testing.T) {
+	vQ := `{"outcome": "needs_human", "summary": "s", "findings": [{"label": "Q", "finding": "q", "evidence": {"file": "backend/log.go", "line": 1}}]}`
+	approved := strings.ReplaceAll(strings.Replace(infraTicket, "ステータス: ready-to-prepare", "ステータス: ready-to-implement", 1), "- [ ]", "- [x]")
+	f := newFlow(t, approved, map[string][]string{"p5": {`{"outcome": "done", "summary": "s"}`}, "p5-verify": {vQ, vApproved}})
+	mustRun(t, f)
+	f.reload(t)
+	f.ws.prepareErr = errors.New("clone を用意できない")
+	if _, err := f.e.Resume(context.Background()); err == nil {
+		t.Fatal("clone の用意の失敗が返らなかった")
+	}
+	f.ws.prepareErr = nil
+	f.reload(t)
+	if _, err := f.e.Resume(context.Background()); err != nil || f.status(t) != ticket.ReadyForReview {
+		t.Fatalf("2回目の resume: %v, status %s", err, f.status(t))
+	}
+	if last := f.ws.prepareOpts[len(f.ws.prepareOpts)-1]; len(last.Own) != 1 || last.Own[0] != "c1" {
+		t.Errorf("記録が引き継がれていない: %v", last.Own)
 	}
 }
