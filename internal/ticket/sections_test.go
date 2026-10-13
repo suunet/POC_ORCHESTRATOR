@@ -214,3 +214,29 @@ func TestHostCheck_OldLayoutAndTestCount(t *testing.T) {
 		t.Errorf("テストケース = %d, want 2", n)
 	}
 }
+
+// 表のセルの | は \| にエスケープして書き、読み戻すと元の | に戻る（コマンドのパイプを壊さない。M2.7）。
+func TestHostCheck_PipesRoundTrip(t *testing.T) {
+	steps := []ticket.HostCheckStep{
+		{Action: `ss -ltn | grep -E ':(8080|18080)\b'`, Pass: "出力に出ない"},
+		{Action: `docker export c | tar -tf - | grep -E '(^|/)\.env$|(^|/)\.git/'`, Pass: "grep が0件"},
+		{Action: `printf '%s' "$l" | jq -e . >/dev/null || echo "NOT JSON: $l"`, Pass: "`NOT JSON:`が出ない"},
+		{Action: `grep 'a\|b' f`, Pass: "BRE の \\| も保つ"},
+	}
+	tk := load(t, strings.Replace(fullTicket, "| 種別 | 実装 |", "| 種別 | 基盤 |", 1))
+	if err := tk.WriteSections(ticket.Sections{Current: "c", Plan: "p", HostCheck: &ticket.HostCheck{Review: []string{"r"}, Steps: steps}}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(tk.Body, `| 1 | ss -ltn \| grep -E ':(8080\|18080)\b' | 出力に出ない |`) || strings.Contains(tk.Body, "ss -ltn ／") {
+		t.Errorf("| をエスケープしていない:\n%s", tk.Body)
+	}
+	got := tk.HostCheckSteps()
+	if len(got) != len(steps) {
+		t.Fatalf("読み戻した手順 = %d 件:\n%s", len(got), tk.Body)
+	}
+	for i := range steps {
+		if got[i] != steps[i] {
+			t.Errorf("手順 %d: 読み戻し %q, want %q", i+1, got[i], steps[i])
+		}
+	}
+}

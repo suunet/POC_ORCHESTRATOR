@@ -125,10 +125,54 @@ func hostCheckText(h *HostCheck) string {
 	return b.String()
 }
 
-// cell は、表のセルに入れる文字列から改行と | を除く。
+// cell は、表のセルに入れる文字列から改行を除き、| を \| にエスケープする（表の区切りと区別する。
+// コマンドのパイプをそのまま残すため。M2.7）。読むときは splitRow が元の | に戻す。
 func cell(s string) string {
 	s = strings.ReplaceAll(strings.TrimSpace(s), "\n", " ")
-	return strings.ReplaceAll(s, "|", "／")
+	return strings.ReplaceAll(s, "|", `\|`)
+}
+
+// splitRow は、表の1行をセルに分ける。\| は区切りでなく、セルの中の | として読む。
+func splitRow(line string) []string {
+	line = strings.TrimSpace(line)
+	var cells []string
+	var cur strings.Builder
+	for i := 0; i < len(line); i++ {
+		switch {
+		case line[i] == '\\' && i+1 < len(line) && line[i+1] == '|':
+			cur.WriteByte('|')
+			i++
+		case line[i] == '|':
+			cells = append(cells, strings.TrimSpace(cur.String()))
+			cur.Reset()
+		default:
+			cur.WriteByte(line[i])
+		}
+	}
+	cells = append(cells, strings.TrimSpace(cur.String()))
+	// 行の先頭と末尾の | の外側は、セルでない
+	if strings.HasPrefix(line, "|") {
+		cells = cells[1:]
+	}
+	if len(cells) > 0 && strings.HasSuffix(line, "|") && !strings.HasSuffix(line, `\|`) {
+		cells = cells[:len(cells)-1]
+	}
+	return cells
+}
+
+// HostCheckSteps は、§4.5 のホストでの手順の表を読み戻す（順の列は除く）。
+func (t *Ticket) HostCheckSteps() []HostCheckStep {
+	var steps []HostCheckStep
+	for _, l := range sectionLines(t.Body, headHostCheck) {
+		s := strings.TrimSpace(l)
+		if !strings.HasPrefix(s, "|") || isHeaderRow(s) || strings.HasPrefix(s, "| ---") {
+			continue
+		}
+		if c := splitRow(s); len(c) == 3 {
+			steps = append(steps, HostCheckStep{Action: c[1], Pass: c[2]})
+		}
+	}
+	return steps
 }
 
 // replaceSection は、見出し head の節の中身を content に替える。
@@ -255,7 +299,7 @@ func hasContent(lines []string) bool {
 		switch {
 		case s == "" || placeholderLines[s]:
 		case strings.HasPrefix(s, "|"):
-			cells := strings.Split(strings.Trim(s, "|"), "|")
+			cells := splitRow(s)
 			filled := false
 			for _, c := range cells {
 				c = strings.TrimSpace(c)

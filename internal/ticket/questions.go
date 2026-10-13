@@ -91,11 +91,7 @@ func QuestionStates(data []byte) map[string]QuestionInfo {
 }
 
 func splitCells(l string) []string {
-	cells := strings.Split(strings.Trim(strings.TrimSpace(l), "|"), "|")
-	for i := range cells {
-		cells[i] = strings.TrimSpace(cells[i])
-	}
-	return cells
+	return splitRow(l)
 }
 
 func (t *Ticket) questionsPath() string {
@@ -119,10 +115,7 @@ func CountUnresolved(data []byte) int {
 	statusCol := -1
 	n := 0
 	for _, l := range strings.Split(string(data), "\n") {
-		cells := strings.Split(strings.Trim(strings.TrimSpace(l), "|"), "|")
-		for i := range cells {
-			cells[i] = strings.TrimSpace(cells[i])
-		}
+		cells := splitRow(l)
 		if len(cells) > 1 && cells[0] == "#" {
 			for i, c := range cells {
 				if c == "状態" {

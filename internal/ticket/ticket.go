@@ -138,7 +138,7 @@ func (t *Ticket) parse() []error {
 
 // tableValue は、「| 項目 | 値 |」の行から、項目が key のときの値を返す。
 func tableValue(line, key string) (string, bool) {
-	cells := strings.Split(strings.Trim(strings.TrimSpace(line), "|"), "|")
+	cells := splitRow(line)
 	if len(cells) != 2 || strings.TrimSpace(cells[0]) != key {
 		return "", false
 	}

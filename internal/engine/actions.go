@@ -270,5 +270,5 @@ func (e *Engine) writeReview(step string) {
 }
 
 func cellText(s string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(s), "\n", " "), "|", "／")
+	return strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(s), "\n", " "), "|", `\|`)
 }
