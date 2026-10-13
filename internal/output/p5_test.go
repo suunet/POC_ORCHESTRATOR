@@ -16,7 +16,7 @@ func TestParseP5_Done(t *testing.T) {
 	  "tests": [{"test": "TestHealth_OK", "file": "backend/tests/unit/health_test.go", "acceptance": ["UC-001-AC-01"]}],
 	  "changedSheets": [".docs/design/uc/UC-001.md"]
 	}`
-	r, err := output.ParseP5([]byte(data), true)
+	r, err := output.ParseP5([]byte(data), true, nil)
 	if err != nil {
 		t.Fatalf("ParseP5: %v", err)
 	}
@@ -27,7 +27,7 @@ func TestParseP5_Done(t *testing.T) {
 
 func TestParseP5_Blocked(t *testing.T) {
 	data := `{"outcome": "blocked", "summary": "依存の追加が必要", "blockReason": {"kind": "dependency", "detail": "HTTP のフレームワークが go.mod にない"}}`
-	r, err := output.ParseP5([]byte(data), true)
+	r, err := output.ParseP5([]byte(data), true, nil)
 	if err != nil {
 		t.Fatalf("ParseP5: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestParseP5_Invalid(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := output.ParseP5([]byte(tc.data), true)
+			_, err := output.ParseP5([]byte(tc.data), true, nil)
 			if err == nil {
 				t.Fatal("want error")
 			}
@@ -91,10 +91,33 @@ func TestDescribeP5(t *testing.T) {
 // 指示書の§4.3 にテストケースがなければ、done でもテストは0件でよい（M2.7）。あれば今のとおり不正。
 func TestParseP5_NoTestCases(t *testing.T) {
 	data := []byte(`{"outcome": "done", "summary": "compose と Dockerfile を足した"}`)
-	if _, err := output.ParseP5(data, false); err != nil {
+	if _, err := output.ParseP5(data, false, nil); err != nil {
 		t.Errorf("§4.3 が0件なのに不正: %v", err)
 	}
-	if _, err := output.ParseP5(data, true); err == nil || !strings.Contains(err.Error(), "tests") {
+	if _, err := output.ParseP5(data, true, nil); err == nil || !strings.Contains(err.Error(), "tests") {
 		t.Errorf("§4.3 があるのにテスト0件で合格した: %v", err)
+	}
+}
+
+// done なら、検証のコマンドをすべて実行して終了コード 0 だったと verify に書く（M2.9）。
+func TestParseP5_Verify(t *testing.T) {
+	names := []string{"build", "test", "lint"}
+	base := `{"outcome": "done", "summary": "s", "tests": [{"test": "T", "file": "f"}], `
+	ok := base + `"verify": [{"name": "build", "exitCode": 0}, {"name": "test", "exitCode": 0}, {"name": "lint", "exitCode": 0}]}`
+	if _, err := output.ParseP5([]byte(ok), true, names); err != nil {
+		t.Fatalf("合格: %v", err)
+	}
+	for name, tc := range map[string]struct{ data, want string }{
+		"verify がない":   {base[:len(base)-2] + "}", "build"},
+		"1つ実行していない":    {base + `"verify": [{"name": "build", "exitCode": 0}, {"name": "test", "exitCode": 0}]}`, "lint"},
+		"終了コードが 0 でない": {base + `"verify": [{"name": "build", "exitCode": 0}, {"name": "test", "exitCode": 1}, {"name": "lint", "exitCode": 0}]}`, "test の終了コードが 1"},
+	} {
+		if _, err := output.ParseP5([]byte(tc.data), true, names); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v, want %q", name, err, tc.want)
+		}
+	}
+	// blocked なら verify は要らない
+	if _, err := output.ParseP5([]byte(`{"outcome": "blocked", "summary": "s", "blockReason": {"kind": "scope", "detail": "d"}}`), true, names); err != nil {
+		t.Errorf("blocked: %v", err)
 	}
 }

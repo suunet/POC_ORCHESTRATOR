@@ -204,7 +204,7 @@ func TestRun_LogsReviewReportAndQuestions(t *testing.T) {
 	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Fix}})
 	res := mustRun(t, f)
 	log, _ := os.ReadFile(filepath.Join(res.RunDir, "log.jsonl"))
-	for _, w := range []string{`"event":"review-report"`, `"path":"reviews/01-p2-review.md"`, `"event":"questions-added"`, `"ids":["Q-01","Q-02","Q-03"]`} {
+	for _, w := range []string{`"event":"review-report"`, `"path":"reviews/01-p2-review.md"`, `"event":"questions-added"`, `"ids":["Q-01","Q-02"]`} {
 		if !strings.Contains(string(log), w) {
 			t.Errorf("記録に %s がない:\n%s", w, log)
 		}
@@ -276,5 +276,17 @@ func TestHuman_DoneNeedsCleanMainIDs(t *testing.T) {
 	checks.MainIDsClean = func() error { return nil }
 	if err := engine.Human(f.e.Ticket, f.e.Workflow, "done", f.e.Now(), checks); err != nil {
 		t.Fatalf("done: %v", err)
+	}
+}
+
+// Q の指摘の選択肢は、質疑の本文に「選択肢：」として入る。質疑は指摘1件につき1件（M2.9）。
+func TestRun_QuestionOptionsInQuestions(t *testing.T) {
+	p2 := `{"outcome": "needs_fix", "summary": "s", "findings": [
+	  {"label": "Q", "finding": "公開のアドレス", "evidence": {"id": "UC-001"}, "options": ["127.0.0.1 だけ", "0.0.0.0"], "suggestion": "127.0.0.1 だけを推奨"}]}`
+	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2}})
+	mustRun(t, f)
+	q, _ := os.ReadFile(filepath.Join(f.root, ".docs/_stash/tickets/T-002/questions.md"))
+	if n, _ := f.e.Ticket.UnresolvedQuestions(); n != 1 || !strings.Contains(string(q), "選択肢：127.0.0.1 だけ／0.0.0.0") {
+		t.Errorf("質疑 %d 件:\n%s", n, q)
 	}
 }

@@ -24,15 +24,16 @@ type Finding struct {
 	Finding    string    `json:"finding" desc:"指摘の本文"`
 	Evidence   *Evidence `json:"evidence" desc:"根拠（必須。ファイル・行・ID のいずれか）"`
 	Suggestion string    `json:"suggestion,omitempty" desc:"提案（修正はしない）"`
+	Options    []string  `json:"options,omitempty" desc:"Q の指摘で、人に選んでもらう選択肢（推奨があれば、どれが推奨かを suggestion に書く）。Q 以外には書かない"`
 }
 
-// ReviewResult は、BJ の step（p2-review・p5-verify）の出力。
+// ReviewResult は、BJ の step（p2-review・p5-verify）の出力。人に確かめたいことは、すべて Q の指摘として書く
+// （指摘と質問の二重をなくすため、questions の項目は持たない。M2.9）。
 type ReviewResult struct {
-	Outcome   string     `json:"outcome" desc:"結果"`
-	Summary   string     `json:"summary" desc:"レビューの要約"`
-	Questions []Question `json:"questions,omitempty" desc:"人に確かめたいこと"`
-	Notes     []string   `json:"notes,omitempty" desc:"補足"`
-	Findings  []Finding  `json:"findings,omitempty" desc:"指摘"`
+	Outcome  string    `json:"outcome" desc:"結果"`
+	Summary  string    `json:"summary" desc:"レビューの要約"`
+	Notes    []string  `json:"notes,omitempty" desc:"補足"`
+	Findings []Finding `json:"findings,omitempty" desc:"指摘"`
 }
 
 // Stopping は、遷移を止めるラベル（MUST・Q）の指摘があるかを返す。
@@ -94,8 +95,10 @@ func parseReview(data []byte, outcomes []string, expected func(must, q bool) str
 		if e := f.Evidence; e == nil || (e.File == "" && e.ID == "") {
 			add("findings[%d].evidence にファイルか ID がない", i)
 		}
+		if len(f.Options) > 0 && f.Label != "Q" {
+			add("findings[%d].options は Q の指摘にだけ書く（%s）", i, f.Label)
+		}
 	}
-	errs = append(errs, validateQuestions(r.Questions)...)
 	if len(errs) == 0 {
 		must, q := r.Stopping()
 		if want := expected(must, q); r.Outcome != want {

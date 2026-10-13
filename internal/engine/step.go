@@ -50,7 +50,11 @@ var stepDefs = map[string]stepDef{
 		return r.Outcome, nil
 	}},
 	"p5": {"prompts/instructions/p5.md", output.DescribeP5, func(e *Engine, d []byte) (string, error) {
-		r, err := output.ParseP5(d, e.Ticket.TestCaseCount() > 0)
+		var names []string
+		for _, c := range gate.Commands(e.Project.Verify) {
+			names = append(names, c.Name)
+		}
+		r, err := output.ParseP5(d, e.Ticket.TestCaseCount() > 0, names)
 		if err != nil {
 			return "", err
 		}

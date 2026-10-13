@@ -48,7 +48,7 @@ func TestRun_InfraP3WithoutHostCheck(t *testing.T) {
 // §4.3 にテストケースがなければ、P5 はテスト0件で done を出せる。
 func TestRun_P5WithoutTestCases(t *testing.T) {
 	approved := strings.ReplaceAll(strings.Replace(infraTicket, "ステータス: ready-to-prepare", "ステータス: ready-to-implement", 1), "- [ ]", "- [x]")
-	f := newFlow(t, approved, map[string][]string{"p5": {`{"outcome": "done", "summary": "compose と Dockerfile を足した"}`}, "p5-verify": {vApproved}})
+	f := newFlow(t, approved, map[string][]string{"p5": {`{"outcome": "done", "summary": "compose と Dockerfile を足した", "verify": [{"name": "build", "exitCode": 0}, {"name": "test", "exitCode": 0}, {"name": "lint", "exitCode": 0}]}`}, "p5-verify": {vApproved}})
 	res := mustRun(t, f)
 	if f.status(t) != ticket.ReadyForReview || f.runner.calls["p5"] != 1 {
 		t.Fatalf("res = %+v, status %s, P5 の呼び出し %d", res, f.status(t), f.runner.calls["p5"])
@@ -96,7 +96,7 @@ func TestRun_P2IMOToP3(t *testing.T) {
 func TestResume_AfterP5VerifyNeedsHuman(t *testing.T) {
 	vQ := `{"outcome": "needs_human", "summary": "人の判断が要る", "findings": [{"label": "Q", "finding": "手順の文言", "evidence": {"file": "backend/log.go", "line": 1}}]}`
 	approved := strings.ReplaceAll(strings.Replace(infraTicket, "ステータス: ready-to-prepare", "ステータス: ready-to-implement", 1), "- [ ]", "- [x]")
-	f := newFlow(t, approved, map[string][]string{"p5": {`{"outcome": "done", "summary": "s"}`}, "p5-verify": {vQ, vApproved}})
+	f := newFlow(t, approved, map[string][]string{"p5": {`{"outcome": "done", "summary": "s", "verify": [{"name": "build", "exitCode": 0}, {"name": "test", "exitCode": 0}, {"name": "lint", "exitCode": 0}]}`}, "p5-verify": {vQ, vApproved}})
 	res := mustRun(t, f)
 	if res.Outcome != engine.Stopped || res.Reason != "needs_human" {
 		t.Fatalf("res = %+v", res)
@@ -122,7 +122,7 @@ func TestResume_AfterP5VerifyNeedsHuman(t *testing.T) {
 func TestResume_AfterPrepareError(t *testing.T) {
 	vQ := `{"outcome": "needs_human", "summary": "s", "findings": [{"label": "Q", "finding": "q", "evidence": {"file": "backend/log.go", "line": 1}}]}`
 	approved := strings.ReplaceAll(strings.Replace(infraTicket, "ステータス: ready-to-prepare", "ステータス: ready-to-implement", 1), "- [ ]", "- [x]")
-	f := newFlow(t, approved, map[string][]string{"p5": {`{"outcome": "done", "summary": "s"}`}, "p5-verify": {vQ, vApproved}})
+	f := newFlow(t, approved, map[string][]string{"p5": {`{"outcome": "done", "summary": "s", "verify": [{"name": "build", "exitCode": 0}, {"name": "test", "exitCode": 0}, {"name": "lint", "exitCode": 0}]}`}, "p5-verify": {vQ, vApproved}})
 	mustRun(t, f)
 	f.reload(t)
 	f.ws.prepareErr = errors.New("clone を用意できない")

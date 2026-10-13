@@ -52,18 +52,42 @@ type P5Result struct {
 	Questions     []Question    `json:"questions,omitempty" desc:"人に確かめたいこと（推測で埋めない）"`
 	Notes         []string      `json:"notes,omitempty" desc:"補足（気づいたが扱わなかったことなど）"`
 	Tests         []TestMapping `json:"tests,omitempty" desc:"書いたテストと受入条件の対応。outcome が done なら1件以上（指示書の§4.3 が0件なら空でよい）"`
+	Verify        []VerifyRun   `json:"verify,omitempty" desc:"実行した検証のコマンド（「検証」に挙げたものすべて）と終了コード。outcome が done なら、すべて実行して終了コード 0"`
 	ChangedSheets []string      `json:"changedSheets,omitempty" desc:"更新した文書（指示書の§4.4に挙がったものだけ）"`
 	BlockReason   *BlockReason  `json:"blockReason,omitempty" desc:"outcome が blocked のときの理由（blocked のときだけ書く）"`
 }
 
+// VerifyRun は、P5 が実行した検証のコマンドの1つ（M2.9）。
+type VerifyRun struct {
+	Name     string `json:"name" desc:"検証の名前（build・test・lint など、「検証」に挙げた名前）"`
+	ExitCode int    `json:"exitCode" desc:"終了コード"`
+}
+
 // ParseP5 は、P5 の出力を読み込んで検査する。誤りはまとめて返す。requireTests は、指示書の§4.3 に
-// テストケースがあるか（なければ、done でもテストは0件でよい。M2.7）。
-func ParseP5(data []byte, requireTests bool) (*P5Result, error) {
+// テストケースがあるか（なければ、done でもテストは0件でよい。M2.7）。verifyNames は検証のコマンドの名前で、
+// done なら、そのすべてを実行して終了コード 0 だったと出力に書かなければならない（M2.9。正は gateflow 自身の検証）。
+func ParseP5(data []byte, requireTests bool, verifyNames []string) (*P5Result, error) {
 	var r P5Result
 	if err := decodeStrict(data, &r); err != nil {
 		return nil, err
 	}
-	if errs := r.validate(requireTests); len(errs) > 0 {
+	errs := r.validate(requireTests)
+	if r.Outcome == OutcomeDone {
+		ran := map[string]int{}
+		for _, v := range r.Verify {
+			ran[v.Name] = v.ExitCode
+		}
+		for _, n := range verifyNames {
+			code, ok := ran[n]
+			switch {
+			case !ok:
+				errs = append(errs, fmt.Errorf("outcome が done なのに、検証の %s を実行した結果が verify にない（検証のコマンドをすべて実行してから終える）", n))
+			case code != 0:
+				errs = append(errs, fmt.Errorf("outcome が done なのに、検証の %s の終了コードが %d（合格してから終える）", n, code))
+			}
+		}
+	}
+	if len(errs) > 0 {
 		return nil, fmt.Errorf("出力の内容が正しくない:\n%w", errors.Join(errs...))
 	}
 	return &r, nil

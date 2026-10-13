@@ -14,26 +14,25 @@ import (
 	"gateflow/internal/workflow"
 )
 
-// P2 の差し戻し：MUST（UC-001 が根拠）と Q（出力先）と、Q と同じ内容の BJ の質問。IMO は裁定の対象にしない。
+// P2 の差し戻し：MUST（UC-001 が根拠）と Q（出力先）。IMO は裁定の対象にしない。
 const p2Fix = `{"outcome": "needs_fix", "summary": "穴がある",
   "findings": [
     {"label": "MUST", "finding": "UC-001 の要求とログの項目が対応していない", "evidence": {"id": "UC-001"}, "suggestion": "§2 に項目を書く"},
     {"label": "Q", "finding": "出力先は標準出力でよいか", "evidence": {"file": "backend/log.go", "line": 1}},
-    {"label": "IMO", "finding": "名前", "evidence": {"file": "backend/log.go"}}],
-  "questions": [{"text": "出力先は標準出力でよいか"}]}`
+    {"label": "IMO", "finding": "名前", "evidence": {"file": "backend/log.go"}}]}`
 
 // ARB：MUST は UC-001 を根拠に裁定し、Q と BJ の質問は束ねて人へ回す。
 const arbEscalated = `{"outcome": "escalated", "summary": "1件を裁定、1件を人へ",
   "decisions": [
     {"findings": [0], "decider": "arb", "answer": "§2 に UC-001 のログの項目を書く", "basis": {"kind": "catalog", "ref": "UC-001"}},
-    {"findings": [1], "questions": [0], "decider": "human", "criterion": "scope", "question": "出力先をどうするか。1. 標準出力 2. ファイル。推奨 1"}],
+    {"findings": [1], "decider": "human", "criterion": "scope", "question": "出力先をどうするか。1. 標準出力 2. ファイル。推奨 1"}],
   "section2": "- UC-001 のログの項目を出す（Q-01）"}`
 
 // ARB：すべて裁定する。
 const arbResolved = `{"outcome": "resolved", "summary": "すべて裁定",
   "decisions": [
     {"findings": [0], "decider": "arb", "answer": "§2 に UC-001 のログの項目を書く", "basis": {"kind": "catalog", "ref": "UC-001"}, "edits": ["UC-001"]},
-    {"findings": [1], "questions": [0], "decider": "arb", "answer": "標準出力に出す", "basis": {"kind": "standard", "ref": "十二要素のアプリのログ"}}]}`
+    {"findings": [1], "decider": "arb", "answer": "標準出力に出す", "basis": {"kind": "standard", "ref": "十二要素のアプリのログ"}}]}`
 
 // newARBFlow は、P2 の差し戻しを ARB へ回す遷移表で newFlow を作る。組み込みの遷移表は M2.6 の試行の後に
 // 元の「質疑に登録して draft へ」に戻したが、ARB の実装は新しいモデルを評価するために残しているので、ここで確かめる。
@@ -75,7 +74,7 @@ func TestARB_Escalated(t *testing.T) {
 	if states["Q-01"].Decider != "ARB" || states["Q-01"].State != "確定" || states["Q-02"].Decider != "人" || states["Q-02"].State != "未回答" || len(states) != 2 {
 		t.Errorf("質疑の状態 = %+v\n%s", states, q)
 	}
-	for _, want := range []string{"カタログ：UC-001", "人へ回す（基準：範囲）", "（BJ の質問）出力先は標準出力でよいか", "| 決定者 | 根拠 |"} {
+	for _, want := range []string{"カタログ：UC-001", "人へ回す（基準：範囲）", "| 決定者 | 根拠 |"} {
 		if !strings.Contains(q, want) {
 			t.Errorf("質疑に %q がない:\n%s", want, q)
 		}
@@ -143,7 +142,7 @@ func TestARB_ForcedHumanWhenFindingRemains(t *testing.T) {
 	forcedHuman := `{"outcome": "escalated", "summary": "残った指摘を人へ",
   "decisions": [
     {"findings": [0], "decider": "human", "criterion": "ambiguous", "question": "裁定が BJ に通らなかった。どうするか"},
-    {"findings": [1], "questions": [0], "decider": "human", "criterion": "ambiguous", "question": "裁定が BJ に通らなかった。どうするか"}]}`
+    {"findings": [1], "decider": "human", "criterion": "ambiguous", "question": "裁定が BJ に通らなかった。どうするか"}]}`
 	f := newARBFlow(t, flowTicket, map[string][]string{"p2-review": {p2Fix}, "p2-arbitrate": {arbResolved, again, forcedHuman}})
 	f.ws.workChanges = map[string]string{".docs/design/uc/UC-001.md": "# UC-001\\n\\n| ID |\\n|---|\\n| UC-001-AC-01 |\\n| UC-001-AC-02 |\\n\\nUC-001 のログの項目\\n"}
 	f.ws.workChangesOnce = true
@@ -170,9 +169,9 @@ func TestARB_LimitEscalatesToHuman(t *testing.T) {
 	if res.Outcome != engine.Gate || f.status(t) != ticket.Draft || !strings.Contains(res.Message, "上限（1）") || f.runner.calls["p2-arbitrate"] != 1 {
 		t.Fatalf("res = %+v, ARB の呼び出し %d", res, f.runner.calls["p2-arbitrate"])
 	}
-	// ARB を通らないので、BJ の指摘（MUST・Q）と質問がそのまま質疑になる（束ねは ARB が行う）
-	if n, _ := f.e.Ticket.UnresolvedQuestions(); n != 3 {
-		t.Errorf("人へ回した質疑 = %d, want 3", n)
+	// ARB を通らないので、BJ の指摘（MUST・Q）がそのまま質疑になる
+	if n, _ := f.e.Ticket.UnresolvedQuestions(); n != 2 {
+		t.Errorf("人へ回した質疑 = %d, want 2（MUST と Q。M2.9 で BJ の質問をなくした）", n)
 	}
 }
 

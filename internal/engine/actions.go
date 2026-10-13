@@ -219,7 +219,7 @@ func (e *Engine) checkAcceptance(ctx context.Context) (string, error) {
 	return "", nil
 }
 
-// findingsToQuestions は、BJ の MUST と Q の指摘、BJ の質問を、未回答の質疑にする（Q-05）。
+// findingsToQuestions は、BJ の MUST と Q の指摘を、指摘1件につき1件の未回答の質疑にする（Q-05。M2.9 で BJ の質問をなくした）。
 func (e *Engine) findingsToQuestions(step string) error {
 	r := e.lastReview
 	if r == nil {
@@ -231,12 +231,14 @@ func (e *Engine) findingsToQuestions(step string) error {
 			continue
 		}
 		q := ticketQuestion{Summary: summarize(f.Finding), Body: f.Finding, Evidence: evidenceText(f.Evidence), Suggestion: f.Suggestion}
+		if len(f.Options) > 0 {
+			q.Body += "\n\n選択肢：" + strings.Join(f.Options, "／")
+		}
 		if f.Label == "MUST" {
 			q.Mark = "指示書の修正が必要"
 		}
 		qs = append(qs, q)
 	}
-	qs = append(qs, outputQuestions(r.Questions)...)
 	_, err := e.appendQuestions(step, stepLabel(step), qs)
 	return err
 }

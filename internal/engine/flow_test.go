@@ -89,7 +89,7 @@ const (
 	  "acceptance": [{"id": "UC-001-AC-02", "uc": "UC-001", "content": "ログに必須の項目がある"}],
 	  "testCases": [{"test": "TestLog", "layer": "scenario", "targets": ["UC-001-AC-02"], "content": "項目を確かめる"}],
 	  "sheets": [{"file": ".docs/design/uc/UC-001.md", "change": "受入条件を足す"}]}`
-	p5Done    = `{"outcome": "done", "summary": "実装した", "tests": [{"test": "TestLog", "file": "backend/tests/scenario/log_test.go", "acceptance": ["UC-001-AC-02"]}]}`
+	p5Done    = `{"outcome": "done", "summary": "実装した", "verify": [{"name": "build", "exitCode": 0}, {"name": "test", "exitCode": 0}, {"name": "lint", "exitCode": 0}], "tests": [{"test": "TestLog", "file": "backend/tests/scenario/log_test.go", "acceptance": ["UC-001-AC-02"]}]}`
 	vApproved = `{"outcome": "approved", "summary": "突き合わせた"}`
 	vMust     = `{"outcome": "needs_fix", "summary": "直す", "findings": [{"label": "MUST", "finding": "エラーを無視している", "evidence": {"file": "backend/log.go", "line": 3}}]}`
 )

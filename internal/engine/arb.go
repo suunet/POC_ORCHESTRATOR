@@ -366,17 +366,14 @@ func (e *Engine) decisionBody(d output.Decision) string {
 		}
 		b.WriteString("\n")
 	}
-	for _, q := range d.Questions {
-		fmt.Fprintf(&b, "- （BJ の質問）%s\n", strings.TrimSpace(e.lastReview.Questions[q].Text))
-	}
 	return b.String()
 }
 
 func (e *Engine) decisionSummary(d output.Decision) string {
-	if len(d.Findings) > 0 {
-		return summarize(e.lastReview.Findings[d.Findings[0]].Finding)
+	if len(d.Findings) == 0 {
+		return ""
 	}
-	return summarize(e.lastReview.Questions[d.Questions[0]].Text)
+	return summarize(e.lastReview.Findings[d.Findings[0]].Finding)
 }
 
 // arbAnswers は、ARB が裁定したものを、決定者 ARB・状態「確定」で質疑に書く。

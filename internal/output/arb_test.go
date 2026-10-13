@@ -13,13 +13,12 @@ var arbReview = &output.ReviewResult{Outcome: "needs_fix", Summary: "s",
 		{Label: "Q", Finding: "b", Evidence: &output.Evidence{ID: "UC-001"}},
 		{Label: "IMO", Finding: "c", Evidence: &output.Evidence{ID: "UC-001"}},
 	},
-	Questions: []output.Question{{Text: "b と同じ"}},
 }
 
 func TestParseARB_OK(t *testing.T) {
 	r, err := output.ParseARB([]byte(`{"outcome": "escalated", "summary": "s", "decisions": [
 	  {"findings": [0], "decider": "arb", "answer": "x", "basis": {"kind": "catalog", "ref": "UC-001"}, "edits": ["UC-001"]},
-	  {"findings": [1], "questions": [0], "decider": "human", "criterion": "contract", "question": "どうするか"}]}`), arbReview, nil)
+	  {"findings": [1], "decider": "human", "criterion": "contract", "question": "どうするか"}]}`), arbReview, nil)
 	if err != nil || !r.Human() {
 		t.Fatalf("r = %+v, err = %v", r, err)
 	}
@@ -33,20 +32,20 @@ func TestParseARB_Invalid(t *testing.T) {
 		want   string
 	}{
 		"指摘の漏れ": {`{"outcome": "resolved", "summary": "s", "decisions": [
-		  {"findings": [0], "questions": [0], "decider": "arb", "answer": "x", "basis": {"kind": "catalog", "ref": "UC-001"}}]}`, nil, "指摘 1"},
+		  {"findings": [0], "decider": "arb", "answer": "x", "basis": {"kind": "catalog", "ref": "UC-001"}}]}`, nil, "指摘 1"},
 		"重ねて入れた": {`{"outcome": "resolved", "summary": "s", "decisions": [
-		  {"findings": [0, 1], "questions": [0], "decider": "arb", "answer": "x", "basis": {"kind": "catalog", "ref": "UC-001"}},
+		  {"findings": [0, 1], "decider": "arb", "answer": "x", "basis": {"kind": "catalog", "ref": "UC-001"}},
 		  {"findings": [1], "decider": "arb", "answer": "x", "basis": {"kind": "catalog", "ref": "UC-001"}}]}`, nil, "（2 件）"},
 		"IMO を裁定": {`{"outcome": "resolved", "summary": "s", "decisions": [
-		  {"findings": [0, 1, 2], "questions": [0], "decider": "arb", "answer": "x", "basis": {"kind": "catalog", "ref": "UC-001"}}]}`, nil, "IMO"},
+		  {"findings": [0, 1, 2], "decider": "arb", "answer": "x", "basis": {"kind": "catalog", "ref": "UC-001"}}]}`, nil, "IMO"},
 		"arb の根拠なし": {`{"outcome": "resolved", "summary": "s", "decisions": [
-		  {"findings": [0, 1], "questions": [0], "decider": "arb", "answer": "x"}]}`, nil, "根拠"},
+		  {"findings": [0, 1], "decider": "arb", "answer": "x"}]}`, nil, "根拠"},
 		"human の基準なし": {`{"outcome": "escalated", "summary": "s", "decisions": [
-		  {"findings": [0, 1], "questions": [0], "decider": "human", "question": "q"}]}`, nil, "基準"},
+		  {"findings": [0, 1], "decider": "human", "question": "q"}]}`, nil, "基準"},
 		"outcome の食い違い": {`{"outcome": "resolved", "summary": "s", "decisions": [
-		  {"findings": [0, 1], "questions": [0], "decider": "human", "criterion": "scope", "question": "q"}]}`, nil, "escalated"},
+		  {"findings": [0, 1], "decider": "human", "criterion": "scope", "question": "q"}]}`, nil, "escalated"},
 		"人へ回すべき指摘を裁定": {`{"outcome": "resolved", "summary": "s", "decisions": [
-		  {"findings": [0, 1], "questions": [0], "decider": "arb", "answer": "x", "basis": {"kind": "standard", "ref": "RFC"}}]}`, []int{1}, "人へ回さなければならない"},
+		  {"findings": [0, 1], "decider": "arb", "answer": "x", "basis": {"kind": "standard", "ref": "RFC"}}]}`, []int{1}, "人へ回さなければならない"},
 		"知らない項目": {`{"outcome": "resolved", "summary": "s", "decisions": [], "extra": 1}`, nil, "JSON"},
 	} {
 		_, err := output.ParseARB([]byte(tc.json), arbReview, tc.forced)

@@ -208,3 +208,18 @@ func TestParseP3_IMO(t *testing.T) {
 		t.Errorf("IMO なし: %v", err)
 	}
 }
+
+// BJ の出力は questions を持たない（書けば不正）。人に確かめたいことは Q の指摘に書き、選択肢は options（M2.9）。
+func TestParseP2_NoQuestionsAndOptions(t *testing.T) {
+	q := `{"outcome": "needs_fix", "summary": "s", "findings": [{"label": "Q", "finding": "f", "evidence": {"id": "UC-001"}, "options": ["a", "b"], "suggestion": "a を推奨"}]}`
+	r, err := output.ParseP2([]byte(q))
+	if err != nil || len(r.Findings[0].Options) != 2 {
+		t.Fatalf("Q の options: %v", err)
+	}
+	if _, err := output.ParseP2([]byte(strings.Replace(q, `"findings"`, `"questions": [{"text": "x"}], "findings"`, 1))); err == nil || !strings.Contains(err.Error(), "questions") {
+		t.Errorf("questions を書いたのに不正にならない: %v", err)
+	}
+	if _, err := output.ParseP2([]byte(strings.Replace(q, `"label": "Q"`, `"label": "MUST"`, 1))); err == nil || !strings.Contains(err.Error(), "options") {
+		t.Errorf("MUST に options: %v", err)
+	}
+}

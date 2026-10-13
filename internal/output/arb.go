@@ -24,7 +24,6 @@ type Basis struct {
 // Decision は、BJ の指摘（と質問）の1件ごとの裁定。同じ内容の指摘と質問は1件に束ねる。
 type Decision struct {
 	Findings  []int    `json:"findings,omitempty" desc:"束ねた BJ の指摘の番号（/in/review.json の findings の 0 から数えた位置。MUST と Q だけ）"`
-	Questions []int    `json:"questions,omitempty" desc:"束ねた BJ の質問の番号（/in/review.json の questions の 0 から数えた位置）"`
 	Decider   string   `json:"decider" desc:"決定者。arb（ARB が裁定する）か human（人へ回す）" enum:"arb,human"`
 	Answer    string   `json:"answer,omitempty" desc:"arb のとき：裁定の文（質疑の回答として残る）"`
 	Basis     *Basis   `json:"basis,omitempty" desc:"arb のとき：根拠（ちょうど1つ）"`
@@ -64,11 +63,10 @@ func ParseARB(data []byte, review *ReviewResult, forced []int) (*ARBResult, erro
 		add("summary がない")
 	}
 	findingSeen := map[int]int{}
-	questionSeen := map[int]int{}
 	for i, d := range r.Decisions {
 		where := fmt.Sprintf("decisions[%d]", i)
-		if len(d.Findings) == 0 && len(d.Questions) == 0 {
-			add("%s：findings も questions もない", where)
+		if len(d.Findings) == 0 {
+			add("%s：findings がない", where)
 		}
 		for _, f := range d.Findings {
 			if f < 0 || f >= len(review.Findings) {
@@ -79,13 +77,6 @@ func ParseARB(data []byte, review *ReviewResult, forced []int) (*ARBResult, erro
 				add("%s：指摘 %d は %s で、裁定の対象（MUST・Q）でない", where, f, review.Findings[f].Label)
 			}
 			findingSeen[f]++
-		}
-		for _, q := range d.Questions {
-			if q < 0 || q >= len(review.Questions) {
-				add("%s：質問の番号 %d が範囲の外", where, q)
-				continue
-			}
-			questionSeen[q]++
 		}
 		switch d.Decider {
 		case "arb":
@@ -120,11 +111,6 @@ func ParseARB(data []byte, review *ReviewResult, forced []int) (*ARBResult, erro
 	for i, f := range review.Findings {
 		if slices.Contains(stoppingLabel, f.Label) && findingSeen[i] != 1 {
 			add("BJ の指摘 %d（%s）が、ちょうど1件の裁定に入っていない（%d 件）", i, f.Label, findingSeen[i])
-		}
-	}
-	for i := range review.Questions {
-		if questionSeen[i] != 1 {
-			add("BJ の質問 %d が、ちょうど1件の裁定に入っていない（%d 件）", i, questionSeen[i])
 		}
 	}
 	if want := map[bool]string{true: "escalated", false: "resolved"}[r.Human()]; r.Outcome != "" && r.Outcome != want {
