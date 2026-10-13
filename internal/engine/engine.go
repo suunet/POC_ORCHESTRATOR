@@ -61,6 +61,7 @@ type Workspace interface {
 	TreeHash(ctx context.Context, ticketID string) (string, error)
 	Snapshot(ctx context.Context, ticketID, dest string) error
 	Reset(ctx context.Context, ticketID string) error
+	MergedTree(ctx context.Context, ticketID, branch, mainBranch, dest string) (conflict bool, err error)
 	Tracked(ctx context.Context, mainBranch, path string) bool
 }
 
@@ -490,6 +491,9 @@ func (e *Engine) loopIn(ctx context.Context, run *ticket.Run, st *State, step st
 
 		route := e.Workflow.Steps[step].On[outcome]
 		failure, err := e.doActions(ctx, st, step, route.Actions)
+		if errors.As(err, &se) {
+			return stopped(se.reason, se.detail, step)
+		}
 		if err != nil {
 			return Result{}, err
 		}

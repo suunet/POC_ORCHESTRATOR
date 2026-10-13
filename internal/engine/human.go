@@ -29,6 +29,8 @@ type Event struct {
 type Checks struct {
 	// BranchMerged は、作業ブランチの先頭が main に含まれている（祖先である）かを確かめ、含まれていなければ理由を返す
 	BranchMerged func(branch string) error
+	// MainIDsClean は、main の ID 整合チェックに必須の指摘がないかを確かめ、あれば理由を返す（M2.9）
+	MainIDsClean func() error
 }
 
 // Human は、関門のコマンドを実行する。機械検証（guards）に合格したときだけステータスを書く。
@@ -74,6 +76,13 @@ func checkGuard(t *ticket.Ticket, guard string, checks Checks) error {
 	case "host-checked":
 		if t.HasHostCheck() && !t.HostCheckRecorded() {
 			return fmt.Errorf("§4.5 にホストでの確かめがあるのに、§5 に結果が書かれていない")
+		}
+	case "ids-clean":
+		if checks.MainIDsClean == nil {
+			return fmt.Errorf("main の ID 整合チェックを行う手段がない")
+		}
+		if err := checks.MainIDsClean(); err != nil {
+			return err
 		}
 	case "branch-merged":
 		// NOTE: マージそのものは人が git で行う。gateflow は main に書き込まず、含まれていることだけを確かめる

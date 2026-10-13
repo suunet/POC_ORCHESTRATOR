@@ -5,7 +5,7 @@
   "human": [
     {"command": "ready", "from": ["draft", "ready-to-approve"], "to": "ready-to-prepare", "guards": ["questions-resolved"]},
     {"command": "approve", "from": ["ready-to-approve"], "to": "ready-to-implement", "guards": ["approval-checked"]},
-    {"command": "done", "from": ["ready-for-review"], "to": "done", "guards": ["host-checked", "branch-merged"]},
+    {"command": "done", "from": ["ready-for-review"], "to": "done", "guards": ["host-checked", "branch-merged", "ids-clean"]},
     {"command": "cancel", "from": ["draft", "ready-to-prepare", "ready-to-approve", "ready-to-implement", "implementing"], "to": "cancelled"}
   ],
   "auto": [
@@ -35,7 +35,7 @@
       "failed": {"loop": "p5", "counter": "verify"}
     }},
     "p5-verify": {"agent": "bj", "on": {
-      "approved": {"actions": ["check-ids", "import"], "to": "ready-for-review"},
+      "approved": {"actions": ["check-ids", "check-main-ids", "import"], "to": "ready-for-review"},
       "needs_fix": {"loop": "p5", "counter": "review"},
       "needs_human": {"stop": "human"}
     }}
@@ -64,7 +64,8 @@
     },
     "stops": {
       "error": "エラー", "invalid-output": "出力の不正", "limit-loops": "往復の上限", "limit-steps": "step の上限",
-      "no-progress": "進展なし", "timeout": "時間切れ", "write-failed": "記録を書けない", "interrupted": "中断"
+      "no-progress": "進展なし", "timeout": "時間切れ", "write-failed": "記録を書けない", "interrupted": "中断",
+      "id-duplicate": "main と ID が重なる"
     },
     "commands": {"ready": "要件の確定", "approve": "承認", "done": "完了", "cancel": "中止"}
   }

@@ -38,7 +38,7 @@ const (
 )
 
 // EngineStops は、gateflow が自分で止まる理由（step の結果で止まるものを除く）。表示名が要る。
-var EngineStops = []string{"error", "invalid-output", "limit-loops", "limit-steps", "no-progress", "timeout", "write-failed", "interrupted"}
+var EngineStops = []string{"error", "invalid-output", "limit-loops", "limit-steps", "no-progress", "timeout", "write-failed", "interrupted", "id-duplicate"}
 
 // StageOfStep は、step の段の番号を返す（なければ -1）。
 func (d *Display) StageOfStep(step string) int {

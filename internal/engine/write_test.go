@@ -239,3 +239,42 @@ func TestRun_WaitsForAgentQueue(t *testing.T) {
 		t.Error("実行の後に順番待ちの印が残っている")
 	}
 }
+
+// 取り込みの前に、main と作業ブランチを合わせた木で ID 整合チェックを行い、重なれば取り込まずに止める（M2.9）。
+func TestRun_MainIDsDuplicateStopsBeforeImport(t *testing.T) {
+	approved := strings.ReplaceAll(strings.Replace(flowTicket, "ステータス: ready-to-prepare", "ステータス: ready-to-implement", 1), "- [ ]", "- [x]")
+	f := newFlow(t, approved, map[string][]string{"p5": {p5Done}, "p5-verify": {vApproved}})
+	f.ws.mergedExtra = map[string]string{".docs/design/buc.md": "| BUC-S02 | UC-001（ほかのチケットの UC） |\n"}
+	res := mustRun(t, f)
+	if res.Outcome != engine.Stopped || res.Reason != "id-duplicate" || !strings.Contains(res.Message, "UC-001") {
+		t.Fatalf("res = %+v", res)
+	}
+	if len(f.ws.imports) != 0 || f.status(t) != ticket.Implementing {
+		t.Errorf("重なっているのに取り込んだ: %v, %s", f.ws.imports, f.status(t))
+	}
+}
+
+// 合わせると衝突するときは、検査できないので警告を残して進む（衝突は人のマージで出る。done で main を検査する）。
+func TestRun_MainIDsConflictWarns(t *testing.T) {
+	approved := strings.ReplaceAll(strings.Replace(flowTicket, "ステータス: ready-to-prepare", "ステータス: ready-to-implement", 1), "- [ ]", "- [x]")
+	f := newFlow(t, approved, map[string][]string{"p5": {p5Done}, "p5-verify": {vApproved}})
+	f.ws.mergedConflict = true
+	res := mustRun(t, f)
+	if f.status(t) != ticket.ReadyForReview || len(f.ws.imports) != 1 || len(res.Warnings) == 0 {
+		t.Fatalf("res = %+v, 取り込み %v", res, f.ws.imports)
+	}
+}
+
+// done の検査は、main の ID 整合チェックに必須の指摘があれば done にしない（M2.9）。
+func TestHuman_DoneNeedsCleanMainIDs(t *testing.T) {
+	body := strings.Replace(flowTicket, "ステータス: ready-to-prepare", "ステータス: ready-for-review", 1)
+	f := newFlow(t, body, nil)
+	checks := engine.Checks{BranchMerged: func(string) error { return nil }, MainIDsClean: func() error { return errors.New("VAR-21 が2回定義されている") }}
+	if err := engine.Human(f.e.Ticket, f.e.Workflow, "done", f.e.Now(), checks); err == nil || !strings.Contains(err.Error(), "VAR-21") {
+		t.Fatalf("done = %v", err)
+	}
+	checks.MainIDsClean = func() error { return nil }
+	if err := engine.Human(f.e.Ticket, f.e.Workflow, "done", f.e.Now(), checks); err != nil {
+		t.Fatalf("done: %v", err)
+	}
+}

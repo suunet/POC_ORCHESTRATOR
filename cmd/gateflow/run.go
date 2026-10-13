@@ -349,7 +349,10 @@ func cmdHuman(command string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
-	checks := engine.Checks{BranchMerged: func(branch string) error { return branchMerged(dir, project.Branch.Main, branch) }}
+	checks := engine.Checks{
+		BranchMerged: func(branch string) error { return branchMerged(dir, project.Branch.Main, branch) },
+		MainIDsClean: func() error { return mainIDsClean(dir, project) },
+	}
 	if err := engine.Human(tk, wf, command, time.Now(), checks); err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitFailed
@@ -607,4 +610,40 @@ func holderName(h agentq.Holder) string {
 		return h.Step
 	}
 	return "ほかの gateflow"
+}
+
+// mainIDsClean は、main の木（git archive。ホストの作業ツリーは読まない）で ID 整合チェックを行い、必須の指摘があれば
+// 理由を返す（done の検査。並行の実行で main に ID の重複が入っていないか。M2.9）。
+func mainIDsClean(dir string, project *config.Project) error {
+	if project.IDs == nil {
+		return nil
+	}
+	rules, err := idcheck.NewRules(*project.IDs)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.MkdirTemp("", "gateflow-main-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if err := workspace.ArchiveTree(ctx, dir, "refs/heads/"+project.Branch.Main, tmp); err != nil {
+		return err
+	}
+	res, err := idcheck.Run(tmp, rules)
+	if err != nil {
+		return err
+	}
+	var msgs []string
+	for _, f := range res.Findings {
+		if f.Level == idcheck.Required {
+			msgs = append(msgs, fmt.Sprintf("%s:%d %s", f.File, f.Line, f.Message))
+		}
+	}
+	if len(msgs) > 0 {
+		return fmt.Errorf("main の ID 整合チェックに必須の指摘がある（ほかのチケットと ID が重なっているかもしれない。main を直してから done する）：%s", strings.Join(msgs, "／"))
+	}
+	return nil
 }

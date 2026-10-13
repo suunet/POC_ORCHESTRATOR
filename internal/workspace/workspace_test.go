@@ -451,3 +451,74 @@ func TestReviewerMounts(t *testing.T) {
 		}
 	}
 }
+
+// catalogBundle は、project の main から作業ブランチを切り、file に line を足したコミットのバンドルを返す。
+func catalogBundle(t *testing.T, project, branch, file, line string) []byte {
+	t.Helper()
+	work := t.TempDir()
+	git(t, work, "clone", "-q", project, ".")
+	git(t, work, "switch", "-q", "-c", branch)
+	p := filepath.Join(work, file)
+	b, _ := os.ReadFile(p)
+	os.WriteFile(p, append(b, []byte(line)...), 0o644)
+	git(t, work, "add", "-A")
+	git(t, work, "commit", "-q", "-m", "feat(T-002): x")
+	out := filepath.Join(t.TempDir(), "b.bundle")
+	git(t, work, "bundle", "create", out, branch)
+	data, _ := os.ReadFile(out)
+	return data
+}
+
+// MergedTree は、その時点の main と作業ブランチを合わせた木を取り出す。ホストの ref と作業ツリーは変えない（M2.9）。
+func TestMergedTree(t *testing.T) {
+	project := newRepo(t)
+	os.WriteFile(filepath.Join(project, "var.md"), []byte("| ID | x |\n| --- | --- |\n| VAR-01 | a |\n"), 0o644)
+	git(t, project, "add", "-A")
+	git(t, project, "commit", "-q", "-m", "catalog")
+	bundle := catalogBundle(t, project, "feature/t-002-x", "var.md", "| VAR-02 | b |\n")
+	// 作業ブランチを切った後に、main が先に進む（ほかのチケットが VAR-02 を入れた）
+	os.WriteFile(filepath.Join(project, "README.md"), []byte("y\n"), 0o644)
+	b, _ := os.ReadFile(filepath.Join(project, "var.md"))
+	os.WriteFile(filepath.Join(project, "var.md"), append([]byte("# 変数\n\n"), b...), 0o644)
+	git(t, project, "commit", "-qam", "other ticket")
+	refs := git(t, project, "for-each-ref")
+	head := git(t, project, "rev-parse", "HEAD")
+
+	dest := t.TempDir()
+	ws := newWorkspace(t, project, &fakeRunner{replies: []reply{{stdout: bundle}}})
+	conflict, err := ws.MergedTree(context.Background(), "T-002", "feature/t-002-x", "main", dest)
+	if err != nil || conflict {
+		t.Fatalf("MergedTree: %v, 衝突 %v", err, conflict)
+	}
+	got, _ := os.ReadFile(filepath.Join(dest, "var.md"))
+	if !strings.Contains(string(got), "# 変数") || !strings.Contains(string(got), "| VAR-02 | b |") {
+		t.Errorf("合わせた木の var.md:\n%s", got)
+	}
+	if git(t, project, "for-each-ref") != refs || git(t, project, "rev-parse", "HEAD") != head {
+		t.Error("ホストの ref か HEAD が変わった")
+	}
+	if _, err := os.Stat(filepath.Join(project, ".git", "FETCH_HEAD")); err == nil {
+		t.Error("FETCH_HEAD を書いた")
+	}
+
+	// 同じ行を両方で変えると衝突する。衝突なら何も取り出さない
+	git(t, project, "commit", "-q", "--allow-empty", "-m", "x")
+	os.WriteFile(filepath.Join(project, "var.md"), []byte("| ID | x |\n| --- | --- |\n| VAR-01 | main |\n"), 0o644)
+	git(t, project, "commit", "-qam", "main changes VAR-01")
+	conflictBundle := func() []byte {
+		work := t.TempDir()
+		git(t, work, "clone", "-q", project, ".")
+		git(t, work, "switch", "-q", "-c", "feature/t-003-x", "HEAD~2")
+		os.WriteFile(filepath.Join(work, "var.md"), []byte("| ID | x |\n| --- | --- |\n| VAR-01 | branch |\n"), 0o644)
+		git(t, work, "commit", "-qam", "branch changes VAR-01")
+		out := filepath.Join(t.TempDir(), "c.bundle")
+		git(t, work, "bundle", "create", out, "feature/t-003-x")
+		data, _ := os.ReadFile(out)
+		return data
+	}()
+	dest2 := t.TempDir()
+	ws = newWorkspace(t, project, &fakeRunner{replies: []reply{{stdout: conflictBundle}}})
+	if conflict, err := ws.MergedTree(context.Background(), "T-003", "feature/t-003-x", "main", dest2); err != nil || !conflict {
+		t.Fatalf("衝突を返さない: %v, %v", conflict, err)
+	}
+}

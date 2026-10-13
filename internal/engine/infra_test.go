@@ -57,7 +57,7 @@ func TestRun_P5WithoutTestCases(t *testing.T) {
 
 // §4.5 にホストでの確かめがあるチケットは、§5 に結果を書くまで done にできない（M2.7 の Q-03）。
 func TestHuman_DoneNeedsHostCheckResult(t *testing.T) {
-	merged := engine.Checks{BranchMerged: func(string) error { return nil }}
+	merged := engine.Checks{BranchMerged: func(string) error { return nil }, MainIDsClean: func() error { return nil }}
 	body := strings.Replace(infraTicket, "ステータス: ready-to-prepare", "ステータス: ready-for-review", 1)
 	body = strings.Replace(body, "### §4.5 ホストでの確かめ（P3でAIが書く。種別が基盤なら必須）\n\n- \n",
 		"### §4.5 ホストでの確かめ（P3でAIが書く。種別が基盤なら必須）\n\n**ホストで動かす前のコードレビュー**\n\n- compose を読む\n", 1)

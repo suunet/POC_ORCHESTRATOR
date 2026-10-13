@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,6 +30,8 @@ func (e *Engine) doActions(ctx context.Context, st *State, step string, actions 
 			fail, err = e.checkAcceptance(ctx)
 		case "check-ids":
 			fail, err = e.checkIDs(ctx)
+		case "check-main-ids":
+			err = e.checkMainIDs(ctx)
 		case "import":
 			if err = e.Workspace.Import(ctx, e.Ticket.ID, e.Ticket.Branch); err == nil {
 				e.log("import", map[string]any{"branch": e.Ticket.Branch})
@@ -49,6 +52,10 @@ func (e *Engine) doActions(ctx context.Context, st *State, step string, actions 
 			err = e.p3Questions()
 		default:
 			err = fmt.Errorf("操作 %s は gateflow にない", a)
+		}
+		var se *errStop
+		if errors.As(err, &se) {
+			return "", err // 人の確認待ちで止める（理由はそのまま）
 		}
 		if err != nil {
 			return "", fmt.Errorf("操作 %s：%w", a, err)
@@ -119,6 +126,44 @@ func (e *Engine) exportForCheck(ctx context.Context) (string, string, error) {
 	dir := filepath.Join(e.run.Dir, "checks", fmt.Sprintf("%02d", e.checks))
 	hash, err := e.Workspace.Export(ctx, e.Ticket.ID, dir)
 	return dir, hash, err
+}
+
+// stopIDDuplicate は、main と合わせると ID 整合チェックの必須の指摘が出るときの止まる理由（M2.9）。
+const stopIDDuplicate = "id-duplicate"
+
+// checkMainIDs は、作業ブランチへ取り込む前に、その時点の main と作業ブランチを合わせた木で ID 整合チェックを行う（M2.9）。
+// 並行で先に main へ入った ID と重なれば（重複定義など、必須の指摘）、取り込まずに人の確認待ちで止める。
+// 合わせると衝突するときは、検査できないので記録だけ残す（衝突は人のマージで必ず出て、done の検査も受け皿になる）。
+func (e *Engine) checkMainIDs(ctx context.Context) error {
+	e.checks++
+	dir := filepath.Join(e.run.Dir, "checks", fmt.Sprintf("%02d-main", e.checks))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return e.writeFailed(dir, err)
+	}
+	conflict, err := e.Workspace.MergedTree(ctx, e.Ticket.ID, e.Ticket.Branch, e.Project.Branch.Main, dir)
+	if err != nil {
+		return err
+	}
+	if conflict {
+		e.log("check-main-ids", map[string]any{"conflict": true})
+		e.warnings = append(e.warnings, "作業ブランチを main と合わせると衝突するので、main との ID の重複を確かめていない（マージのときに人が解く。done で main を検査する）")
+		return nil
+	}
+	res, err := idcheck.Run(dir, e.Rules)
+	if err != nil {
+		return err
+	}
+	var msgs []string
+	for _, f := range res.Findings {
+		if f.Level == idcheck.Required {
+			msgs = append(msgs, fmt.Sprintf("%s:%d %s", f.File, f.Line, f.Message))
+		}
+	}
+	e.log("check-main-ids", map[string]any{"dir": dir, "required": len(msgs)})
+	if len(msgs) > 0 {
+		return &errStop{reason: stopIDDuplicate, detail: "main と合わせると、ID 整合チェックの必須の指摘がある（並行で先に main へ入った ID と重なっている）：" + strings.Join(msgs, "／")}
+	}
+	return nil
 }
 
 func (e *Engine) checkIDs(ctx context.Context) (string, error) {

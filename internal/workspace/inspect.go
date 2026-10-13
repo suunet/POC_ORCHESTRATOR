@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -167,4 +168,80 @@ func (w *Workspace) TreeHash(ctx context.Context, ticketID string) (string, erro
 		return "", fmt.Errorf("作業ツリーの指紋を作れない: %w", err)
 	}
 	return strings.TrimSpace(out.String()), nil
+}
+
+// ArchiveTree は、プロジェクトのリポジトリの木（ブランチや木の ID）を dest に取り出す（git archive。ホストの作業ツリーと
+// ref は変えない）。main の ID 整合チェックに使う（M2.9）。
+func ArchiveTree(ctx context.Context, project, treeish, dest string) error {
+	cmd := exec.CommandContext(ctx, "git", "-C", project, "archive", "--format=tar", treeish)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if err := untar(out, dest); err != nil {
+		cmd.Wait()
+		return err
+	}
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("%s を取り出せない: %v: %s", treeish, err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+// MergedTree は、clone の作業ブランチとプロジェクトの main を合わせた木（マージせずに git merge-tree で作る）を dest に
+// 取り出す（M2.9。並行で先に main へ入った ID との重複の検査に使う）。ホストには作業ブランチのオブジェクトだけを入れ、
+// 作業ツリーと ref は変えない。合わせると衝突するときは conflict を返し、何も取り出さない。
+func (w *Workspace) MergedTree(ctx context.Context, ticketID, branch, mainBranch, dest string) (conflict bool, err error) {
+	var out bytes.Buffer
+	spec := w.spec(ticketID, "merged",
+		[]container.Mount{{Type: container.Volume, Source: w.Volume(), Subpath: ticketID + "/repo", Target: "/work", ReadOnly: true}},
+		map[string]string{"BRANCH": branch}, importScript)
+	if err := w.run(ctx, spec, &out); err != nil {
+		return false, fmt.Errorf("作業ブランチを取り出せない: %w", err)
+	}
+	f, err := os.CreateTemp("", "gateflow-*.bundle")
+	if err != nil {
+		return false, err
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.Write(out.Bytes()); err != nil {
+		f.Close()
+		return false, err
+	}
+	if err := f.Close(); err != nil {
+		return false, err
+	}
+	ref := "refs/heads/" + branch
+	heads, err := w.git(ctx, "bundle", "list-heads", f.Name(), ref)
+	fields := strings.Fields(string(heads))
+	if err != nil || len(fields) == 0 {
+		return false, fmt.Errorf("作業ブランチ %s のバンドルを読めない: %v", branch, err)
+	}
+	head := fields[0]
+	// オブジェクトだけを入れる（ref も FETCH_HEAD も書かない）
+	if _, err := w.git(ctx, "-c", "core.hooksPath=/dev/null", "fetch", "--quiet", "--no-write-fetch-head", f.Name(), ref); err != nil {
+		return false, fmt.Errorf("作業ブランチ %s のオブジェクトを入れられない: %w", branch, err)
+	}
+	tree, err := w.git(ctx, "merge-tree", "--write-tree", "--no-messages", "refs/heads/"+mainBranch, head)
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 {
+			return true, nil
+		}
+		return false, fmt.Errorf("main と作業ブランチを合わせられない: %w", err)
+	}
+	return false, ArchiveTree(ctx, w.project, strings.TrimSpace(firstLine(string(tree))), dest)
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }

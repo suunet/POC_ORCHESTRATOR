@@ -108,8 +108,10 @@ type flowWorkspace struct {
 	workChangesOnce bool
 	snapshots       int
 	resets          int
-	prepareErr      error  // あれば Prepare が返す（clone の用意の失敗）
-	beforePrepare   func() // あれば Prepare の始めに呼ぶ（M2.8）
+	prepareErr      error             // あれば Prepare が返す（clone の用意の失敗）
+	beforePrepare   func()            // あれば Prepare の始めに呼ぶ（M2.8）
+	mergedExtra     map[string]string // main と合わせた木で、カタログのファイルの末尾に足す行（M2.9）
+	mergedConflict  bool
 }
 
 func (w *flowWorkspace) Prepare(_ context.Context, _, _, _ string, _ *config.Deps, opt workspace.PrepareOptions) (workspace.Prepared, error) {
@@ -158,6 +160,19 @@ func (w *flowWorkspace) Import(_ context.Context, _, branch string) error {
 	w.imports = append(w.imports, branch)
 	return nil
 }
+
+// MergedTree は、main と作業ブランチを合わせた木として、カタログに mergedExtra を重ねて書く（M2.9）。
+func (w *flowWorkspace) MergedTree(_ context.Context, _, _, _, dest string) (bool, error) {
+	if w.mergedConflict {
+		return true, nil
+	}
+	for p, body := range catalog {
+		os.MkdirAll(filepath.Dir(filepath.Join(dest, p)), 0o755)
+		os.WriteFile(filepath.Join(dest, p), []byte(body+w.mergedExtra[p]), 0o644)
+	}
+	return false, nil
+}
+
 func (w *flowWorkspace) Export(_ context.Context, _, dest string) (string, error) {
 	for p, body := range catalog {
 		os.MkdirAll(filepath.Dir(filepath.Join(dest, p)), 0o755)
@@ -804,8 +819,8 @@ func TestHuman_Done(t *testing.T) {
 			t.Errorf("確かめたブランチ = %s", branch)
 		}
 		return nil
-	}}
-	notMerged := engine.Checks{BranchMerged: func(string) error { return errors.New("main に含まれていない") }}
+	}, MainIDsClean: func() error { return nil }}
+	notMerged := engine.Checks{BranchMerged: func(string) error { return errors.New("main に含まれていない") }, MainIDsClean: func() error { return nil }}
 
 	review := strings.Replace(flowTicket, "ステータス: ready-to-prepare", "ステータス: ready-for-review", 1)
 	f := newFlow(t, review, nil)

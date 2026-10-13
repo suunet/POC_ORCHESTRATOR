@@ -21,7 +21,8 @@ func gitIn(t *testing.T, dir string, args ...string) {
 func TestRun_Done(t *testing.T) {
 	root := project(t, actorTable)
 	gitIn(t, root, "init", "-q", "-b", "main")
-	gitIn(t, root, "commit", "-q", "--allow-empty", "-m", "one")
+	gitIn(t, root, "add", "docs", ".gateflow") // カタログは main にある（done で main の ID 整合チェックを行う。M2.9）
+	gitIn(t, root, "commit", "-q", "-m", "one")
 	gitIn(t, root, "branch", "feature/x")
 	path := writeTicket(t, root, "T-001", "ready-for-review")
 
@@ -86,5 +87,22 @@ func TestRun_CheckTicketStates(t *testing.T) {
 	}
 	if code, out, _ := runCmd("check", "ids", "--project", root); code != exitOK || strings.Contains(out, "ticket-state") {
 		t.Errorf("check ids: code=%d out=%q", code, out)
+	}
+}
+
+// done は、main のカタログに ID の重複（並行のチケットが同じ ID を発番した）があれば done にしない（M2.9）。
+func TestRun_DoneMainIDsDuplicate(t *testing.T) {
+	root := project(t, actorTable+"\n| ID | アクター |\n|---|---|\n| ACT-01 | 別の人 |\n")
+	gitIn(t, root, "init", "-q", "-b", "main")
+	gitIn(t, root, "add", "docs", ".gateflow")
+	gitIn(t, root, "commit", "-q", "-m", "one")
+	gitIn(t, root, "branch", "feature/x")
+	path := writeTicket(t, root, "T-001", "ready-for-review")
+	code, _, errOut := runCmd("done", "T-001", "--project", root)
+	if code != exitFailed || !strings.Contains(errOut, "ACT-01") || !strings.Contains(errOut, "ID 整合チェック") {
+		t.Fatalf("code=%d err=%q", code, errOut)
+	}
+	if data, _ := os.ReadFile(path); !strings.Contains(string(data), "ステータス: ready-for-review") {
+		t.Errorf("重複があるのに done にした")
 	}
 }
