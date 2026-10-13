@@ -146,7 +146,7 @@ func (e *Engine) ARBTrial(ctx context.Context, src, dest string) (TrialResult, e
 			return res, err
 		}
 		var stderr strings.Builder
-		code, runErr := e.Runner.Run(ctx, spec, logFile, &stderr)
+		code, runErr := e.runAgent(ctx, spec, "trial-p2-arbitrate", logFile, &stderr)
 		if err := logFile.Close(); err != nil {
 			e.writeError(logFile.Name(), err)
 		}

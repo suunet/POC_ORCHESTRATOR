@@ -21,6 +21,7 @@ import (
 	"gateflow/internal/container"
 	"gateflow/internal/idcheck"
 	"gateflow/internal/output"
+	"gateflow/internal/queue"
 	"gateflow/internal/ticket"
 	"gateflow/internal/workflow"
 	"gateflow/internal/workspace"
@@ -94,6 +95,8 @@ type Engine struct {
 	Now        func() time.Time
 	// Stderr は、log.jsonl にも書けないときの出し先（なければ os.Stderr）
 	Stderr io.Writer
+	// Queue は、AI の呼び出しの順番待ちの印（M2.9）。なければ待たない
+	Queue *queue.Lock
 	// MarkRunning は、実行中の印（running.json）を書く。テストで書けない場合を作るために差し替える（M2.8 の Q-04）
 	MarkRunning func(run *ticket.Run, now time.Time) (unmark func() error, err error)
 

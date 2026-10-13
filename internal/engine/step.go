@@ -202,7 +202,7 @@ func (e *Engine) agentStep(ctx context.Context, st *State, step, role, dir strin
 		}
 		spec.Stdin = strings.NewReader(stdin)
 		e.log("agent-start", map[string]any{"step": step, "attempt": attempt})
-		code, err := e.runLogged(ctx, spec, dir, fmt.Sprintf("agent-%d", attempt))
+		code, err := e.runLogged(ctx, spec, dir, fmt.Sprintf("agent-%d", attempt), step)
 		e.log("agent-end", map[string]any{"step": step, "attempt": attempt, "exitCode": code})
 		if errors.Is(err, container.ErrTimeout) || errors.Is(err, container.ErrIdleTimeout) {
 			return "", stop("timeout", "%s：%v", step, err)
@@ -625,13 +625,13 @@ func evidenceText(ev *output.Evidence) string {
 }
 
 // runLogged は、コンテナを起動し、出力を step の記録に残す。
-func (e *Engine) runLogged(ctx context.Context, spec container.Spec, dir, name string) (int, error) {
+func (e *Engine) runLogged(ctx context.Context, spec container.Spec, dir, name, step string) (int, error) {
 	stdout, err := os.Create(filepath.Join(dir, name+".jsonl"))
 	if err != nil {
 		return 0, err
 	}
 	var stderr bytes.Buffer
-	code, runErr := e.Runner.Run(ctx, spec, stdout, &stderr)
+	code, runErr := e.runAgent(ctx, spec, step, stdout, &stderr)
 	if err := stdout.Close(); err != nil {
 		e.writeError(stdout.Name(), err)
 	}

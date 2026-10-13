@@ -159,6 +159,7 @@ type Lane struct {
 	Count    int       `json:"count,omitempty"`   // 質問の件数
 	Started  string    `json:"started,omitempty"` // 実行中の step の開始
 	Since    string    `json:"since,omitempty"`
+	Holder   string    `json:"holder,omitempty"` // 順番待ちのとき、いま AI を動かしているチケット
 }
 
 // Segment は、段の帯の1つ。Count はその段の往復の回数（その段の step を走らせた回数）。
@@ -178,6 +179,10 @@ type RunRow struct {
 	Started   string `json:"started,omitempty"`
 	Invalid   int    `json:"invalid"` // この step の出力の不正の回数
 	Denied    int    `json:"denied"`  // この実行のプロキシの拒否の数
+	// Waiting は、AI の呼び出しの順番を待っていること（M2.9）。Holder はいま AI を動かしているもの
+	Waiting   bool   `json:"waiting,omitempty"`
+	WaitSince string `json:"waitSince,omitempty"`
+	Holder    string `json:"holder,omitempty"`
 }
 
 // Recent は、最近終わったもの。
@@ -339,11 +344,17 @@ func (m *Monitor) add(st *Status, tr *tracked) {
 			counts[i]++ // 走っている回も数える
 		}
 		lane.Group, lane.Note, lane.Role, lane.Started = GroupRun, "run", m.Workflow.StepRole(step), started
-		lane.Segments = segments(len(d.Stages), lane.Current, SegRun, counts)
+		kind := SegRun
+		waitSince, holder, waiting := agentWaiting(last)
+		if waiting {
+			// AI の呼び出しの順番を待っている（M2.9）
+			lane.Note, lane.Holder, kind = "wait-ai", holder, SegWait
+		}
+		lane.Segments = segments(len(d.Stages), lane.Current, kind, counts)
 		st.Lanes = append(st.Lanes, lane)
 		st.Running = append(st.Running, RunRow{Ticket: t.ID, Title: t.Title, Stage: lane.Current, Step: step,
 			Role: lane.Role, Iteration: m.iteration(tr, step), Started: started, Invalid: invalid,
-			Denied: total(denied(tr.fsys, tr.runDir(last)))})
+			Denied: total(denied(tr.fsys, tr.runDir(last))), Waiting: waiting, WaitSince: waitSince, Holder: holder})
 		return
 	}
 
@@ -508,6 +519,30 @@ func currentStep(r *runRec) (step, started string, invalid int) {
 		}
 	}
 	return step, started, invalid
+}
+
+// agentWaiting は、実行中の実行が AI の呼び出しの順番を待っているか（最後の agent-wait の後に、取れた記録も
+// エージェントの起動の記録もない）と、待ち始めた時刻、いま AI を動かしているものを返す。
+func agentWaiting(r *runRec) (since, holder string, waiting bool) {
+	for _, e := range r.log {
+		switch e["event"] {
+		case "agent-wait":
+			if !waiting {
+				since = str(e["time"])
+			}
+			waiting = true
+			holder = str(e["holderTicket"])
+			if holder == "" {
+				holder = str(e["holderStep"])
+			}
+			if p := str(e["holderProject"]); p != "" && holder != "" {
+				holder = p + " の " + holder
+			}
+		case "agent-acquired", "agent-start", "step-end":
+			waiting, since, holder = false, "", ""
+		}
+	}
+	return since, holder, waiting
 }
 
 // since は、人を待ち始めた時刻（止まった・関門に着いた記録の時刻、なければステータスの最後の記録）。

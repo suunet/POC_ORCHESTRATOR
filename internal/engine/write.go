@@ -1,12 +1,17 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
+
+	"gateflow/internal/container"
+	"gateflow/internal/queue"
 )
 
 // 記録の書き込みは2つに分けて扱う（M2.8。設計の原則「失敗を取り繕わない」の具体）。
@@ -83,4 +88,50 @@ func (e *Engine) relPath(path string) string {
 		}
 	}
 	return path
+}
+
+// runAgent は、AI の呼び出し（エージェントのコンテナ）を、順番待ちの印を取ってから起動する（M2.9）。
+// ほかが持っている間は失敗にせず待ち、待っていることを記録に残す（黙って待たない）。時間の上限は印を取った後から数える。
+func (e *Engine) runAgent(ctx context.Context, spec container.Spec, step string, stdout, stderr io.Writer) (int, error) {
+	release, err := acquireAgent(ctx, e.Queue, e.Project.Name, e.ticketID(), step, e.Now(), e.logOrStderr)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		if err := release(); err != nil {
+			e.cleanupError("agent.lock", err)
+		}
+	}()
+	return e.Runner.Run(ctx, spec, stdout, stderr)
+}
+
+func (e *Engine) ticketID() string {
+	if e.Ticket == nil {
+		return ""
+	}
+	return e.Ticket.ID
+}
+
+// acquireAgent は、順番待ちの印を取る（q が nil なら待たない）。待ち始めと取れたときを logf で残す。
+func acquireAgent(ctx context.Context, q *queue.Lock, project, ticketID, step string, now time.Time,
+	logf func(string, map[string]any)) (func() error, error) {
+	if q == nil {
+		return func() error { return nil }, nil
+	}
+	self, err := queue.Self(project, ticketID, step, now)
+	if err != nil {
+		return nil, err
+	}
+	waitedAny := false
+	release, waited, err := q.Acquire(ctx, self, func(h queue.Holder) {
+		waitedAny = true
+		logf("agent-wait", map[string]any{"step": step, "holderProject": h.Project, "holderTicket": h.Ticket, "holderStep": h.Step, "holderPid": h.PID})
+	})
+	if err != nil {
+		return nil, fmt.Errorf("AI の呼び出しの順番を待てない: %w", err)
+	}
+	if waitedAny {
+		logf("agent-acquired", map[string]any{"step": step, "seconds": waited.Seconds()})
+	}
+	return release, nil
 }

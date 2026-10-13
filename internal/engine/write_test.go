@@ -11,6 +11,7 @@ import (
 
 	"gateflow/internal/config"
 	"gateflow/internal/engine"
+	"gateflow/internal/queue"
 	"gateflow/internal/ticket"
 )
 
@@ -207,5 +208,34 @@ func TestRun_LogsReviewReportAndQuestions(t *testing.T) {
 		if !strings.Contains(string(log), w) {
 			t.Errorf("記録に %s がない:\n%s", w, log)
 		}
+	}
+}
+
+// AI の呼び出しの順番待ち（M2.9）：ほかが印を持っている間は失敗にせず待ち、待ったことを記録に残す。
+func TestRun_WaitsForAgentQueue(t *testing.T) {
+	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Approved}, "p3-prepare": {p3Done}})
+	q := &queue.Lock{Path: filepath.Join(t.TempDir(), "agent-auth.lock"), Interval: 5 * time.Millisecond,
+		Alive: func(h queue.Holder) bool { return h.PID == 1 }}
+	release, busy, err := q.TryAcquire(queue.Holder{PID: 1, Start: "S", Project: "other", Ticket: "T-099", Step: "p5"})
+	if err != nil || busy != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(40 * time.Millisecond)
+		release()
+	}()
+	f.e.Queue = q
+	res := mustRun(t, f)
+	if f.status(t) != ticket.ReadyToApprove {
+		t.Fatalf("res = %+v", res)
+	}
+	log, _ := os.ReadFile(filepath.Join(res.RunDir, "log.jsonl"))
+	for _, w := range []string{`"event":"agent-wait"`, `"holderTicket":"T-099"`, `"event":"agent-acquired"`} {
+		if !strings.Contains(string(log), w) {
+			t.Errorf("記録に %s がない:\n%s", w, log)
+		}
+	}
+	if _, err := os.Stat(q.Path); !os.IsNotExist(err) {
+		t.Error("実行の後に順番待ちの印が残っている")
 	}
 }

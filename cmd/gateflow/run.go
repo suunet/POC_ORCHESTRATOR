@@ -23,6 +23,7 @@ import (
 	"gateflow/internal/container"
 	"gateflow/internal/engine"
 	"gateflow/internal/idcheck"
+	agentq "gateflow/internal/queue"
 	"gateflow/internal/ticket"
 	"gateflow/internal/workflow"
 	"gateflow/internal/workspace"
@@ -206,13 +207,18 @@ func runTickets(ctx context.Context, dir string, ids []string, resume bool, stdo
 		fmt.Fprintln(stderr, err)
 		return exitFailed
 	}
+	q, err := agentQueue(s.agent)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailed
+	}
 	code := exitOK
 	var summary []string
 	for _, tk := range tickets {
 		e := &engine.Engine{
 			Root: dir, Project: s.project, Personal: s.personal, Workflow: s.workflow, Ticket: tk,
 			AgentImage: image, Agent: s.agent, Workspace: ws, Egress: egress, Runner: s.docker,
-			Author: author, Builtins: builtins.FS(), Rules: s.rules, Now: time.Now,
+			Author: author, Builtins: builtins.FS(), Rules: s.rules, Now: time.Now, Queue: q,
 		}
 		fmt.Fprintf(stdout, "%s を進めています（%s、エージェント：%s）…\n", tk.ID, tk.Status, s.agent.Name())
 		var res engine.Result
@@ -448,6 +454,29 @@ func cmdLogin(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		fmt.Fprintln(stderr, err)
 		return exitFailed
 	}
+	// ログインも認証ボリュームを書くので、AI の呼び出しの順番を待つ。待つときは、何を待っているかを画面に出す（M2.9）
+	q, err := agentQueue(ag)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailed
+	}
+	self, err := agentq.Self("", "", "login", time.Now())
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailed
+	}
+	release, _, err := q.Acquire(ctx, self, func(h agentq.Holder) {
+		fmt.Fprintf(stdout, "いま %s の AI が動いています。終わるのを待っています\n", holderName(h))
+	})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailed
+	}
+	defer func() {
+		if err := release(); err != nil {
+			fmt.Fprintf(stderr, "順番待ちの印を外せない：%v\n", err)
+		}
+	}()
 	fmt.Fprintf(stdout, "%s にログインします。ログインが終わったら終了してください。\n", ag.Name())
 	spec := container.Spec{
 		Name: "gateflow-login-" + ag.Name(), Image: images.BaseTag(), User: workspace.User,
@@ -487,8 +516,18 @@ func cmdDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		return exitFailed
 	}
 	fmt.Fprintln(stdout, "エージェントと同じ構成のサンドボックスで確かめています…")
+	q, err := agentQueue(s.agent)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailed
+	}
 	sb := &engine.Sandbox{Root: dir, Project: s.project, AgentImage: agentTag, WorkVolume: ws.Volume(), Agent: s.agent,
-		Workspace: ws, Egress: egress, Runner: s.docker}
+		Workspace: ws, Egress: egress, Runner: s.docker, Queue: q, Notify: func(event string, f map[string]any) {
+			if event == "agent-wait" {
+				fmt.Fprintf(stdout, "いま %s の AI が動いています。終わるのを待っています\n", holderName(agentq.Holder{
+					Project: fmt.Sprint(f["holderProject"]), Ticket: fmt.Sprint(f["holderTicket"]), Step: fmt.Sprint(f["holderStep"])}))
+			}
+		}}
 	results, err := sb.Run(ctx)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -550,4 +589,22 @@ func printProxyLog(w io.Writer, dir string, log []byte) {
 	} else {
 		fmt.Fprintf(w, "  記録：%s\n", path)
 	}
+}
+
+// agentQueue は、エージェントの認証ボリュームの、AI の呼び出しの順番待ちの印を返す（M2.9）。
+func agentQueue(ag agent.Agent) (*agentq.Lock, error) {
+	return agentq.New(ag.AuthMount().Source)
+}
+
+// holderName は、順番待ちの印を持っているものを、人に見せる名前にする（チケット、なければ login など）。
+func holderName(h agentq.Holder) string {
+	switch {
+	case h.Ticket != "" && h.Project != "":
+		return h.Project + " の " + h.Ticket
+	case h.Ticket != "":
+		return h.Ticket
+	case h.Step != "":
+		return h.Step
+	}
+	return "ほかの gateflow"
 }

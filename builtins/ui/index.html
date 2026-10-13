@@ -315,6 +315,7 @@ function renderCard(c) {
 function laneNote(l) {
   const text = {
     run: () => stageName(l.current) + "中・" + since(l.started) + "分",
+    "wait-ai": () => "AI の順番待ち（いま " + (l.holder || "ほか") + " の AI が動いている）",
     stopped: () => "止まった（" + stopName(l.reason) + "）",
     approve: () => "承認を待っている",
     questions: () => "質問 " + l.count + "件",
@@ -358,6 +359,14 @@ function renderRunning(rows) {
   const panel = el("div", { class: "panel" });
   for (const r of rows) {
     const elapsed = r.started ? dur((Date.now() - new Date(r.started)) / 1000) : "";
+    if (r.waiting) {
+      panel.append(el("div", { class: "runrow" }, el("span", { class: "tid" }, r.ticket), el("span", { class: "ttl" }, r.title),
+        el("span", { class: "what" }, stageName(r.stage) + "・" + r.iteration + "回目"),
+        el("span", { class: "role" }, roleName(r.role)),
+        el("span", { class: "badge warn" }, "順番待ち"),
+        el("span", { class: "why" }, "いま " + (r.holder || "ほか") + " の AI が動いている。待って " + dur((Date.now() - new Date(r.waitSince)) / 1000))));
+      continue;
+    }
     const warn = [];
     if (r.invalid) warn.push("出力の不正 " + r.invalid + "回");
     if (r.denied) warn.push("外への接続の拒否 " + r.denied + "件");

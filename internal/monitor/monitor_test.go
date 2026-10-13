@@ -91,6 +91,15 @@ func fixture(t *testing.T) string {
 		map[string]any{"time": "2026-10-14T08:51:00Z", "event": "output-invalid", "step": "p5"}))
 	write(r+"proxy.log", `{"decision":"deny","target":"evil.example:443"}`+"\n")
 
+	// T-019：実行中だが、AI の呼び出しの順番を待っている（M2.9）
+	write("T-019/ticket.md", ticketMD("T-019", "ready-to-prepare", ""))
+	r = "T-019/runs/20261014-085500/"
+	write(r+"running.json", `{"pid":4242,"start":"S","since":"2026-10-14T08:55:00Z"}`)
+	write(r+"state.json", `{"ticket":"T-019","workflow":"aidd-impl","step":"p2-review","steps":1,"status":"ready-to-prepare"}`)
+	write(r+"log.jsonl", logLines(map[string]any{"time": "2026-10-14T08:55:00Z", "event": "step-start", "step": "p2-review", "n": 1},
+		map[string]any{"time": "2026-10-14T08:55:01Z", "event": "agent-start", "step": "p2-review", "attempt": 1},
+		map[string]any{"time": "2026-10-14T08:55:01Z", "event": "agent-wait", "step": "p2-review", "holderProject": "sample", "holderTicket": "T-011", "holderStep": "p5"}))
+
 	// T-012：検証で進展なし（止まった。再開は実装から）
 	write("T-012/ticket.md", ticketMD("T-012", "implementing", ""))
 	r = "T-012/runs/20261014-080000/"
@@ -194,7 +203,7 @@ func TestStatus_Lanes(t *testing.T) {
 	for _, l := range st.Lanes {
 		got = append(got, l.Group+" "+l.Ticket+" "+l.Note)
 	}
-	want := "run T-011 run,human T-010 questions,human T-012 stopped,human T-013 approve,human T-014 review,wait T-015 wait-run,wait T-018 wait-ready"
+	want := "run T-011 run,run T-019 wait-ai,human T-010 questions,human T-012 stopped,human T-013 approve,human T-014 review,wait T-015 wait-run,wait T-018 wait-ready"
 	if strings.Join(got, ",") != want {
 		t.Fatalf("流れ = %v\nwant %s", got, want)
 	}
@@ -217,7 +226,7 @@ func TestStatus_Lanes(t *testing.T) {
 	if l.Current != 4 || l.Segments[4].Kind != "run" || l.Segments[4].Count != 1 || l.Role != "dev" || l.Started == "" {
 		t.Errorf("T-011 = %+v", l)
 	}
-	if len(st.Running) != 1 || st.Running[0].Invalid != 1 || st.Running[0].Denied != 1 || st.Running[0].Iteration != 1 {
+	if len(st.Running) != 2 || st.Running[0].Ticket != "T-011" || st.Running[0].Invalid != 1 || st.Running[0].Denied != 1 || st.Running[0].Iteration != 1 {
 		t.Errorf("AI が作業中 = %+v", st.Running)
 	}
 	if st.Display == nil || len(st.Display.Stages) != 9 {
@@ -312,5 +321,27 @@ func TestStatus_NoTicketsDir(t *testing.T) {
 	st, err := newMonitor(t, t.TempDir()).Status()
 	if err != nil || len(st.Lanes) != 0 || len(st.Cards) != 0 {
 		t.Errorf("st = %+v, err = %v", st, err)
+	}
+}
+
+// AI の呼び出しの順番を待っている run は、流れで「AI の順番待ち」（帯は待ちの色）、AI が作業中の欄に待ちとして出す（M2.9）。
+func TestStatus_AgentWaiting(t *testing.T) {
+	st := status(t, fixture(t))
+	var lane *monitor.Lane
+	for i := range st.Lanes {
+		if st.Lanes[i].Ticket == "T-019" {
+			lane = &st.Lanes[i]
+		}
+	}
+	if lane == nil || lane.Note != "wait-ai" || lane.Holder != "sample の T-011" || lane.Segments[lane.Current].Kind != "wait" {
+		t.Fatalf("流れ = %+v", lane)
+	}
+	for _, r := range st.Running {
+		if r.Ticket == "T-019" && (!r.Waiting || r.WaitSince == "" || r.Holder != "sample の T-011") {
+			t.Errorf("AI が作業中 = %+v", r)
+		}
+		if r.Ticket == "T-011" && r.Waiting {
+			t.Error("T-011 は待っていない")
+		}
 	}
 }

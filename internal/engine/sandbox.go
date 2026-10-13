@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"gateflow/internal/agent"
 	"gateflow/internal/config"
 	"gateflow/internal/container"
+	"gateflow/internal/queue"
 	"gateflow/internal/workspace"
 )
 
@@ -83,6 +85,10 @@ type Sandbox struct {
 	Workspace  Workspace
 	Egress     Egress
 	Runner     Runner
+	// Queue は、AI の呼び出しの順番待ちの印（M2.9）。なければ待たない
+	Queue *queue.Lock
+	// Notify は、順番を待っていることを知らせる先（なければ知らせない）
+	Notify func(event string, fields map[string]any)
 
 	ProxyLog []byte // 実行の後に、プロキシの判定の記録を入れる
 	// CleanupErr は、プロキシを止める・消すときの失敗（呼び出し側が表示する。M2.8）
@@ -131,7 +137,19 @@ func (s *Sandbox) Run(ctx context.Context) ([]CheckResult, error) {
 	spec.Cmd = []string{"sh", "-c", probeScript(SandboxChecks())}
 	spec.Timeout, spec.IdleTimeout = 10*time.Minute, 5*time.Minute
 	var out bytes.Buffer
-	if _, err := s.Runner.Run(ctx, spec, &out, &out); err != nil {
+	notify := s.Notify
+	if notify == nil {
+		notify = func(string, map[string]any) {}
+	}
+	release, err := acquireAgent(ctx, s.Queue, s.Project.Name, sandboxTicket, "sandbox", time.Now(), notify)
+	if err != nil {
+		return nil, err
+	}
+	_, runErr := s.Runner.Run(ctx, spec, &out, &out)
+	if err := release(); err != nil {
+		s.CleanupErr = errors.Join(s.CleanupErr, err)
+	}
+	if err := runErr; err != nil {
 		return nil, fmt.Errorf("確認のコンテナを動かせない: %w", err)
 	}
 	codes := parseChecks(out.String())
