@@ -76,12 +76,18 @@ func (e *Engine) writeSections() error {
 	for _, sh := range r.Sheets {
 		s.Sheets = append(s.Sheets, ticket.SheetRow{File: sh.File, Change: sh.Change})
 	}
+	if h := r.HostCheck; h != nil {
+		s.HostCheck = &ticket.HostCheck{Review: h.Review}
+		for _, st := range h.Steps {
+			s.HostCheck.Steps = append(s.HostCheck.Steps, ticket.HostCheckStep{Action: st.Action, Pass: st.Pass})
+		}
+	}
 	return e.Ticket.WriteSections(s)
 }
 
 func (e *Engine) commit(ctx context.Context, st *State, step string) error {
 	t := e.Ticket
-	msg := fmt.Sprintf("%s(%s): %s", commitType(t.Kind), t.ID, t.Title)
+	msg := fmt.Sprintf("feat(%s): %s", t.ID, t.Title)
 	switch step {
 	case "p3-prepare":
 		msg = fmt.Sprintf("docs(%s): %s（実装の準備）", t.ID, t.Title)
@@ -259,11 +265,4 @@ func (e *Engine) writeReview(step string) {
 
 func cellText(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(s), "\n", " "), "|", "／")
-}
-
-func commitType(k ticket.Kind) string {
-	if k == ticket.KindDocument {
-		return "docs"
-	}
-	return "feat"
 }

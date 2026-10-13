@@ -55,7 +55,11 @@ const fullTicket = `# T-002 ログの基盤を作る
 | --- | --- |
 | | |
 
-### §4.5 承認（人が書く。AIは書かない）
+### §4.5 ホストでの確かめ（P3でAIが書く。種別が基盤なら必須）
+
+- 
+
+### §4.6 承認（人が書く。AIは書かない）
 
 - [ ] §2の要求に合意した
 - [ ] §3の現状の認識に合意した
@@ -100,7 +104,7 @@ func TestWriteSections(t *testing.T) {
 	if strings.Contains(body, "UC-NNN-AC-01") {
 		t.Error("ひな形の行が残っている")
 	}
-	// §4.5 とステータスの行、§1・§2 は変えない。
+	// §4.6 とステータスの行、§1・§2 は変えない。
 	for _, w := range []string{"- [ ] §2の要求に合意した", "ステータス: ready-to-prepare", "- NFR-09 を満たす", "| Issue | 42 |"} {
 		if !strings.Contains(body, w) {
 			t.Errorf("%q が消えた", w)
@@ -163,5 +167,50 @@ func TestIssueID(t *testing.T) {
 	}
 	if got := load(t, strings.Replace(fullTicket, "| Issue | 42 |\n", "", 1)).IssueID(); got != "" {
 		t.Errorf("IssueID = %q, want 空", got)
+	}
+}
+
+// 種別が基盤（M2.7）：§4.5 のホストでの確かめを書き、中身が要る節は §3・§4.1・§4.5。
+func TestWriteSections_HostCheck(t *testing.T) {
+	tk := load(t, strings.Replace(fullTicket, "| 種別 | 実装 |", "| 種別 | 基盤 |", 1))
+	if tk.Kind != ticket.KindInfrastructure || tk.HasHostCheck() {
+		t.Fatalf("種別 %q、書く前のホストでの確かめ %v", tk.Kind, tk.HasHostCheck())
+	}
+	if missing := tk.MissingSections(); len(missing) != 3 {
+		t.Errorf("書く前の埋まっていない節 = %v", missing)
+	}
+	err := tk.WriteSections(ticket.Sections{Current: "c", Plan: "p",
+		HostCheck: &ticket.HostCheck{Review: []string{"compose を読む"}, Steps: []ticket.HostCheckStep{{Action: "docker compose up", Pass: "200"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tk.HasHostCheck() || len(tk.MissingSections()) != 0 || tk.TestCaseCount() != 0 {
+		t.Errorf("ホストでの確かめ %v、埋まっていない節 %v、テストケース %d\n%s", tk.HasHostCheck(), tk.MissingSections(), tk.TestCaseCount(), tk.Body)
+	}
+	if !strings.Contains(tk.Body, "| 1 | docker compose up | 200 |") || !strings.Contains(tk.Body, "- [ ] §2の要求に合意した") {
+		t.Errorf("書いた指示書:\n%s", tk.Body)
+	}
+	// ホストでの確かめがなければ「なし」と書き、基盤では埋まっていないとみなす
+	if err := tk.WriteSections(ticket.Sections{Current: "c", Plan: "p"}); err != nil {
+		t.Fatal(err)
+	}
+	if tk.HasHostCheck() || len(tk.MissingSections()) != 1 {
+		t.Errorf("「なし」: ホストでの確かめ %v、埋まっていない節 %v", tk.HasHostCheck(), tk.MissingSections())
+	}
+}
+
+// 古い形の指示書（§4.5 が承認）を、ホストでの確かめと読み違えない。§4.3 のデータの行を数える。
+func TestHostCheck_OldLayoutAndTestCount(t *testing.T) {
+	old := strings.Replace(fullTicket, "### §4.5 ホストでの確かめ（P3でAIが書く。種別が基盤なら必須）\n\n- \n\n### §4.6 承認", "### §4.5 承認", 1)
+	if tk := load(t, old); tk.HasHostCheck() || tk.HostCheckRecorded() {
+		t.Error("古い形の承認の欄を、ホストでの確かめと読んだ")
+	}
+	tk := load(t, fullTicket)
+	if err := tk.WriteSections(ticket.Sections{Current: "c", Plan: "p",
+		TestCases: []ticket.TestCaseRow{{Test: "A", Layer: "単体", Content: "x"}, {Test: "B", Layer: "単体", Content: "y"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if n := tk.TestCaseCount(); n != 2 {
+		t.Errorf("テストケース = %d, want 2", n)
 	}
 }

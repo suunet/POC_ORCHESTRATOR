@@ -147,7 +147,7 @@ func writeTicket(t *testing.T, root, id, status string) string {
 	t.Helper()
 	path := filepath.Join(root, ".docs/_stash/tickets", id, "ticket.md")
 	os.MkdirAll(filepath.Dir(path), 0o755)
-	body := "# " + id + " テスト\n\nステータス: " + status + "\n\n| 項目 | 値 |\n| --- | --- |\n| 種別 | 実装 |\n| ブランチ | feature/x |\n\n### §4.5 承認\n\n- [x] 合意した\n"
+	body := "# " + id + " テスト\n\nステータス: " + status + "\n\n| 項目 | 値 |\n| --- | --- |\n| 種別 | 実装 |\n| ブランチ | feature/x |\n\n### §4.6 承認\n\n- [x] 合意した\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}

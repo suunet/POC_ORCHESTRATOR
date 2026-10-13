@@ -16,7 +16,7 @@ func TestParseP5_Done(t *testing.T) {
 	  "tests": [{"test": "TestHealth_OK", "file": "backend/tests/unit/health_test.go", "acceptance": ["UC-001-AC-01"]}],
 	  "changedSheets": [".docs/design/uc/UC-001.md"]
 	}`
-	r, err := output.ParseP5([]byte(data))
+	r, err := output.ParseP5([]byte(data), true)
 	if err != nil {
 		t.Fatalf("ParseP5: %v", err)
 	}
@@ -27,7 +27,7 @@ func TestParseP5_Done(t *testing.T) {
 
 func TestParseP5_Blocked(t *testing.T) {
 	data := `{"outcome": "blocked", "summary": "依存の追加が必要", "blockReason": {"kind": "dependency", "detail": "HTTP のフレームワークが go.mod にない"}}`
-	r, err := output.ParseP5([]byte(data))
+	r, err := output.ParseP5([]byte(data), true)
 	if err != nil {
 		t.Fatalf("ParseP5: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestParseP5_Invalid(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := output.ParseP5([]byte(tc.data))
+			_, err := output.ParseP5([]byte(tc.data), true)
 			if err == nil {
 				t.Fatal("want error")
 			}
@@ -85,5 +85,16 @@ func TestDescribeP5(t *testing.T) {
 		if !strings.Contains(d, w) {
 			t.Errorf("説明に %s がない:\n%s", w, d)
 		}
+	}
+}
+
+// 指示書の§4.3 にテストケースがなければ、done でもテストは0件でよい（M2.7）。あれば今のとおり不正。
+func TestParseP5_NoTestCases(t *testing.T) {
+	data := []byte(`{"outcome": "done", "summary": "compose と Dockerfile を足した"}`)
+	if _, err := output.ParseP5(data, false); err != nil {
+		t.Errorf("§4.3 が0件なのに不正: %v", err)
+	}
+	if _, err := output.ParseP5(data, true); err == nil || !strings.Contains(err.Error(), "tests") {
+		t.Errorf("§4.3 があるのにテスト0件で合格した: %v", err)
 	}
 }

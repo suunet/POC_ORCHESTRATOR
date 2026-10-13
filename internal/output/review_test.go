@@ -79,7 +79,7 @@ func TestParseP3_Done(t *testing.T) {
 	  "testCases": [{"test": "TestLog_Fields", "layer": "scenario", "targets": ["UC-001-AC-02"], "content": "項目を確かめる"}],
 	  "sheets": [{"file": ".docs/design/uc/UC-001.md", "change": "受入条件を足す"}],
 	  "unfilled": []
-	}`))
+	}`), false)
 	if err != nil {
 		t.Fatalf("ParseP3: %v", err)
 	}
@@ -110,7 +110,51 @@ func TestParseP3_Invalid(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := output.ParseP3([]byte(tc.data))
+			_, err := output.ParseP3([]byte(tc.data), false)
+			if err == nil {
+				t.Fatal("want error")
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(err.Error(), w) {
+					t.Errorf("error %q does not mention %q", err, w)
+				}
+			}
+		})
+	}
+}
+
+// 種別が基盤：受入条件は0件、テストケースは0件でよく、ホストでの確かめが必須（M2.7）。
+const p3Infra = `{"outcome": "done", "summary": "準備した", "current": "c", "plan": "p",
+  "hostCheck": {"review": ["docker-compose.yaml と Dockerfile：volumes・privileged・公開するポート"],
+    "steps": [{"action": "docker compose up -d", "pass": "GET /health が 200"}]}}`
+
+func TestParseP3_Infra(t *testing.T) {
+	r, err := output.ParseP3([]byte(p3Infra), true)
+	if err != nil {
+		t.Fatalf("ParseP3: %v", err)
+	}
+	if r.HostCheck == nil || len(r.HostCheck.Review) != 1 || r.HostCheck.Steps[0].Pass != "GET /health が 200" {
+		t.Errorf("r = %+v", r)
+	}
+	// 種別が実装なら、受入条件がない出力は今のとおり不正
+	if _, err := output.ParseP3([]byte(p3Infra), false); err == nil || !strings.Contains(err.Error(), "acceptance") {
+		t.Errorf("実装で受入条件なし: %v", err)
+	}
+}
+
+func TestParseP3_InfraInvalid(t *testing.T) {
+	cases := []struct {
+		name, data string
+		want       []string
+	}{
+		{"受入条件がある", strings.Replace(p3Infra, `"plan": "p",`, `"plan": "p", "acceptance": [{"id": "UC-001-AC-01", "uc": "UC-001", "content": "x"}],`, 1), []string{"基盤なのに acceptance"}},
+		{"ホストでの確かめがない", `{"outcome": "done", "summary": "s", "current": "c", "plan": "p"}`, []string{"hostCheck がない"}},
+		{"コードレビューがない", strings.Replace(p3Infra, `["docker-compose.yaml と Dockerfile：volumes・privileged・公開するポート"]`, `[]`, 1), []string{"hostCheck.review"}},
+		{"手順の合格の基準がない", strings.Replace(p3Infra, `, "pass": "GET /health が 200"`, ``, 1), []string{"hostCheck.steps[0]"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := output.ParseP3([]byte(tc.data), true)
 			if err == nil {
 				t.Fatal("want error")
 			}

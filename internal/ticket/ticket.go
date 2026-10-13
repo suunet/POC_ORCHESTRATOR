@@ -36,12 +36,13 @@ const (
 var statuses = []Status{Draft, ReadyToPrepare, ReadyToApprove, ReadyToImplement, Implementing,
 	ReadyForReview, InUAT, Feedback, Done, Cancelled}
 
-// Kind は、チケットの種別。
+// Kind は、チケットの種別。実装は受入条件とテストケースを持つ。基盤は受入条件を持たず、
+// テストケースは0件でよく、ホストでの確かめ（§4.5）を必ず持つ（M2.7）。
 type Kind string
 
 const (
 	KindImplementation Kind = "実装"
-	KindDocument       Kind = "ドキュメント"
+	KindInfrastructure Kind = "基盤"
 )
 
 const statusPrefix = "ステータス:"
@@ -126,8 +127,8 @@ func (t *Ticket) parse() []error {
 	case !validStatus(t.Status):
 		errs = append(errs, fmt.Errorf("ステータス %q は知らない状態", t.Status))
 	}
-	if t.Kind != KindImplementation && t.Kind != KindDocument {
-		errs = append(errs, fmt.Errorf("種別 %q は「実装」か「ドキュメント」でない", t.Kind))
+	if t.Kind != KindImplementation && t.Kind != KindInfrastructure {
+		errs = append(errs, fmt.Errorf("種別 %q は「実装」か「基盤」でない", t.Kind))
 	}
 	if t.Branch == "" {
 		errs = append(errs, errors.New("ブランチの欄がない"))

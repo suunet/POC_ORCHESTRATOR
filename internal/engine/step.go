@@ -19,6 +19,7 @@ import (
 	"gateflow/internal/idcheck"
 	"gateflow/internal/output"
 	"gateflow/internal/prompt"
+	"gateflow/internal/ticket"
 )
 
 // 出力の形が違うときの再実行の回数（設計：1回だけ再実行する）。
@@ -41,7 +42,7 @@ var stepDefs = map[string]stepDef{
 		return r.Outcome, nil
 	}},
 	"p3-prepare": {"prompts/instructions/p3-prepare.md", output.DescribeP3, func(e *Engine, d []byte) (string, error) {
-		r, err := output.ParseP3(d)
+		r, err := output.ParseP3(d, e.Ticket.Kind == ticket.KindInfrastructure)
 		if err != nil {
 			return "", err
 		}
@@ -49,7 +50,7 @@ var stepDefs = map[string]stepDef{
 		return r.Outcome, nil
 	}},
 	"p5": {"prompts/instructions/p5.md", output.DescribeP5, func(e *Engine, d []byte) (string, error) {
-		r, err := output.ParseP5(d)
+		r, err := output.ParseP5(d, e.Ticket.TestCaseCount() > 0)
 		if err != nil {
 			return "", err
 		}

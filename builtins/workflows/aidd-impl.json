@@ -5,7 +5,7 @@
   "human": [
     {"command": "ready", "from": ["draft", "ready-to-approve"], "to": "ready-to-prepare", "guards": ["questions-resolved"]},
     {"command": "approve", "from": ["ready-to-approve"], "to": "ready-to-implement", "guards": ["approval-checked"]},
-    {"command": "done", "from": ["ready-for-review"], "to": "done", "guards": ["branch-merged"]},
+    {"command": "done", "from": ["ready-for-review"], "to": "done", "guards": ["host-checked", "branch-merged"]},
     {"command": "cancel", "from": ["draft", "ready-to-prepare", "ready-to-approve", "ready-to-implement", "implementing"], "to": "cancelled"}
   ],
   "auto": [

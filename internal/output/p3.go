@@ -29,7 +29,19 @@ type Sheet struct {
 	Change string `json:"change" desc:"更新の内容"`
 }
 
-// P3Result は、p3-prepare の出力。gateflow が指示書の§3・§4に書く（§4.5 は人が書く）。
+// HostCheck は、gateflow の外でホストで行う確かめ（§4.5）。Review を先に行い、通ってから Steps を順に行う。
+type HostCheck struct {
+	Review []string        `json:"review" desc:"ホストで動かす前にコードレビューで読むファイルと、確かめること（ホストのフォルダを繋ぐ設定、特権での実行、外へ公開するポートが想定のとおりか）"`
+	Steps  []HostCheckStep `json:"steps" desc:"コードレビューが通ってから、ホストで行う手順（この順で行う）"`
+}
+
+// HostCheckStep は、ホストでの手順の1つ。
+type HostCheckStep struct {
+	Action string `json:"action" desc:"行うこと（コマンドなど）"`
+	Pass   string `json:"pass" desc:"何を見れば合格か"`
+}
+
+// P3Result は、p3-prepare の出力。gateflow が指示書の§3・§4に書く（§4.6 は人が書く）。
 type P3Result struct {
 	Outcome    string       `json:"outcome" desc:"結果" enum:"done,needs_answer"`
 	Summary    string       `json:"summary" desc:"行ったことの要約"`
@@ -37,16 +49,17 @@ type P3Result struct {
 	Notes      []string     `json:"notes,omitempty" desc:"補足"`
 	Current    string       `json:"current,omitempty" desc:"§3 変更前の現状（影響の範囲、関係するカタログ）"`
 	Plan       string       `json:"plan,omitempty" desc:"§4.1 方針"`
-	Acceptance []Acceptance `json:"acceptance,omitempty" desc:"§4.2 受入条件"`
-	TestCases  []TestCase   `json:"testCases,omitempty" desc:"§4.3 テストケース。受入条件ごとにシナリオテストが1件以上"`
+	Acceptance []Acceptance `json:"acceptance,omitempty" desc:"§4.2 受入条件。種別が実装なら1件以上、基盤なら書かない"`
+	TestCases  []TestCase   `json:"testCases,omitempty" desc:"§4.3 テストケース。受入条件ごとにシナリオテストが1件以上。種別が基盤なら0件でよい"`
 	Sheets     []Sheet      `json:"sheets,omitempty" desc:"§4.4 P5 で更新してよい文書"`
+	HostCheck  *HostCheck   `json:"hostCheck,omitempty" desc:"§4.5 ホストでの確かめ（gateflow の中で確かめられない動作を、ready-for-review の後にホストで確かめる）。種別が基盤なら必須、実装なら要るときだけ"`
 	Unfilled   []string     `json:"unfilled,omitempty" desc:"埋められなかった観点の値（質疑にもする）"`
 }
 
 var acceptanceID = regexp.MustCompile(`^(UC-[0-9]{3})-AC-[0-9]{2}$`)
 
-// ParseP3 は、p3-prepare の出力を読み込んで検査する。
-func ParseP3(data []byte) (*P3Result, error) {
+// ParseP3 は、p3-prepare の出力を読み込んで検査する。infra は指示書の種別が基盤か（M2.7）。
+func ParseP3(data []byte, infra bool) (*P3Result, error) {
 	var r P3Result
 	if err := decodeStrict(data, &r); err != nil {
 		return nil, err
@@ -60,10 +73,15 @@ func ParseP3(data []byte) (*P3Result, error) {
 				add("outcome が done なのに %s がない", f.name)
 			}
 		}
-		if len(r.Acceptance) == 0 {
+		switch {
+		case infra && len(r.Acceptance) > 0:
+			add("種別が基盤なのに acceptance がある（基盤のチケットは受入条件を持たない）")
+		case infra && r.HostCheck == nil:
+			add("種別が基盤なのに hostCheck がない")
+		case !infra && len(r.Acceptance) == 0:
 			add("outcome が done なのに acceptance がない")
 		}
-		if len(r.TestCases) == 0 {
+		if !infra && len(r.TestCases) == 0 {
 			add("outcome が done なのに testCases がない")
 		}
 	case "needs_answer":
@@ -107,6 +125,24 @@ func ParseP3(data []byte) (*P3Result, error) {
 	for i, s := range r.Sheets {
 		if s.File == "" {
 			add("sheets[%d].file がない", i)
+		}
+	}
+	if h := r.HostCheck; h != nil {
+		if len(h.Review) == 0 {
+			add("hostCheck.review がない（ホストで動かす前のコードレビューを先に書く）")
+		}
+		if len(h.Steps) == 0 {
+			add("hostCheck.steps がない")
+		}
+		for i, rv := range h.Review {
+			if strings.TrimSpace(rv) == "" {
+				add("hostCheck.review[%d] が空", i)
+			}
+		}
+		for i, st := range h.Steps {
+			if strings.TrimSpace(st.Action) == "" || strings.TrimSpace(st.Pass) == "" {
+				add("hostCheck.steps[%d] の action か pass がない", i)
+			}
 		}
 	}
 	errs = append(errs, validateQuestions(r.Questions)...)

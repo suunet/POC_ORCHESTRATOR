@@ -69,7 +69,11 @@ func checkGuard(t *ticket.Ticket, guard string, checks Checks) error {
 		}
 	case "approval-checked":
 		if !t.ApprovalChecked() {
-			return fmt.Errorf("§4.5 のチェックがすべて入っていない")
+			return fmt.Errorf("§4.6 のチェックがすべて入っていない")
+		}
+	case "host-checked":
+		if t.HasHostCheck() && !t.HostCheckRecorded() {
+			return fmt.Errorf("§4.5 にホストでの確かめがあるのに、§5 に結果が書かれていない")
 		}
 	case "branch-merged":
 		// NOTE: マージそのものは人が git で行う。gateflow は main に書き込まず、含まれていることだけを確かめる

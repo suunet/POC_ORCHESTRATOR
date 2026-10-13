@@ -69,7 +69,8 @@ func TestLoad_Invalid(t *testing.T) {
 		{"ステータスが2行ある", "T-001", strings.Replace(sample, "ステータス: ready-to-implement\n", "ステータス: draft\nステータス: done\n", 1), []string{"ステータス"}},
 		{"知らないステータス", "T-001", strings.Replace(sample, "ready-to-implement", "almost-done", 1), []string{"almost-done"}},
 		{"ブランチがない", "T-001", strings.Replace(sample, "| ブランチ | feature/t-001-publish |\n", "", 1), []string{"ブランチ"}},
-		{"種別が選択肢にない", "T-001", strings.Replace(sample, "| 種別 | 実装 |", "| 種別 | 実装 ／ ドキュメント |", 1), []string{"種別"}},
+		{"種別が選択肢にない", "T-001", strings.Replace(sample, "| 種別 | 実装 |", "| 種別 | 実装 ／ 基盤 |", 1), []string{"種別"}},
+		{"種別がドキュメント（M2.7 で実装と基盤の2つにした）", "T-001", strings.Replace(sample, "| 種別 | 実装 |", "| 種別 | ドキュメント |", 1), []string{"「実装」か「基盤」"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

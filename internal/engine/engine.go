@@ -284,7 +284,7 @@ func (e *Engine) next(status string) string {
 	case string(ticket.Draft):
 		return fmt.Sprintf("質疑（%s）に回答し、状態を「確定」にしてから gateflow ready %s", filepath.Join(filepath.Dir(e.Ticket.Path), ticket.QuestionsFile), id)
 	case string(ticket.ReadyToApprove):
-		return fmt.Sprintf("作業ブランチ %s の差分、指示書の§3・§4、カタログの差分（実行の記録の arb-report.md）を確かめ、§4.5 をチェックしてから gateflow approve %s", e.Ticket.Branch, id)
+		return fmt.Sprintf("作業ブランチ %s の差分、指示書の§3・§4、カタログの差分（実行の記録の arb-report.md）を確かめ、§4.6 をチェックしてから gateflow approve %s", e.Ticket.Branch, id)
 	case string(ticket.ReadyForReview):
 		s := fmt.Sprintf("作業ブランチ %s をコードレビューする", e.Ticket.Branch)
 		if i := e.Project.Issue; i != nil && i.PRRef != "" && e.Ticket.IssueID() != "" {

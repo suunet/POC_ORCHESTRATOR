@@ -51,24 +51,25 @@ type P5Result struct {
 	Summary       string        `json:"summary" desc:"行ったことの要約"`
 	Questions     []Question    `json:"questions,omitempty" desc:"人に確かめたいこと（推測で埋めない）"`
 	Notes         []string      `json:"notes,omitempty" desc:"補足（気づいたが扱わなかったことなど）"`
-	Tests         []TestMapping `json:"tests,omitempty" desc:"書いたテストと受入条件の対応。outcome が done なら1件以上"`
+	Tests         []TestMapping `json:"tests,omitempty" desc:"書いたテストと受入条件の対応。outcome が done なら1件以上（指示書の§4.3 が0件なら空でよい）"`
 	ChangedSheets []string      `json:"changedSheets,omitempty" desc:"更新した文書（指示書の§4.4に挙がったものだけ）"`
 	BlockReason   *BlockReason  `json:"blockReason,omitempty" desc:"outcome が blocked のときの理由（blocked のときだけ書く）"`
 }
 
-// ParseP5 は、P5 の出力を読み込んで検査する。誤りはまとめて返す。
-func ParseP5(data []byte) (*P5Result, error) {
+// ParseP5 は、P5 の出力を読み込んで検査する。誤りはまとめて返す。requireTests は、指示書の§4.3 に
+// テストケースがあるか（なければ、done でもテストは0件でよい。M2.7）。
+func ParseP5(data []byte, requireTests bool) (*P5Result, error) {
 	var r P5Result
 	if err := decodeStrict(data, &r); err != nil {
 		return nil, err
 	}
-	if errs := r.validate(); len(errs) > 0 {
+	if errs := r.validate(requireTests); len(errs) > 0 {
 		return nil, fmt.Errorf("出力の内容が正しくない:\n%w", errors.Join(errs...))
 	}
 	return &r, nil
 }
 
-func (r *P5Result) validate() []error {
+func (r *P5Result) validate(requireTests bool) []error {
 	var errs []error
 	switch r.Outcome {
 	case "":
@@ -80,7 +81,7 @@ func (r *P5Result) validate() []error {
 	if r.Summary == "" {
 		errs = append(errs, errors.New("summary がない"))
 	}
-	if r.Outcome == OutcomeDone && len(r.Tests) == 0 {
+	if r.Outcome == OutcomeDone && requireTests && len(r.Tests) == 0 {
 		errs = append(errs, errors.New("outcome が done なのに tests がない"))
 	}
 	for i, tm := range r.Tests {

@@ -65,7 +65,11 @@ const flowTicket = `# T-002 ログの基盤を作る
 | ファイル | 更新の内容 |
 | --- | --- |
 
-### §4.5 承認（人が書く。AIは書かない）
+### §4.5 ホストでの確かめ（P3でAIが書く。種別が基盤なら必須）
+
+- 
+
+### §4.6 承認（人が書く。AIは書かない）
 
 - [ ] §2の要求に合意した
 - [ ] §3の現状の認識に合意した
@@ -330,9 +334,9 @@ func TestRun_FullFlow(t *testing.T) {
 		t.Errorf("P3 のコミットと取り込み = %q, %q", f.ws.commits, f.ws.imports)
 	}
 
-	// 関門：§4.5 がすべてチェックされていなければ approve できない。
+	// 関門：§4.6 がすべてチェックされていなければ approve できない。
 	if err := engine.Human(tk, f.e.Workflow, "approve", f.e.Now(), engine.Checks{}); err == nil {
-		t.Fatal("§4.5 が未チェックなのに approve できた")
+		t.Fatal("§4.6 が未チェックなのに approve できた")
 	}
 	os.WriteFile(tk.Path, []byte(strings.ReplaceAll(tk.Body, "- [ ]", "- [x]")), 0o644)
 	f.reload(t)
