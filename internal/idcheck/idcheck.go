@@ -57,6 +57,23 @@ type Result struct {
 	Children    int // 定義された子のIDの数
 
 	defined map[string]bool // 定義された ID（子は「親の ID＋区切り＋名前」）
+	where   map[string]Location
+	parent  map[string]string // 子の ID → 親の ID
+}
+
+// Location は、ID の定義の場所（リポジトリのルートからの相対パスと、1から数えた行）。
+type Location struct {
+	File string `json:"file"`
+	Line int    `json:"line"`
+}
+
+// Where は、ID の定義の場所を返す（M2.8。監視の UI の正本に使う）。子の ID は親の定義の場所を返す。
+func (r Result) Where(id string) (Location, bool) {
+	if l, ok := r.where[id]; ok {
+		return l, true
+	}
+	l, ok := r.where[r.parent[id]]
+	return l, ok
 }
 
 // Defined は、id が定義されているか（子の ID を含む）を返す。
@@ -184,9 +201,10 @@ func Run(root string, rules *Rules) (Result, error) {
 		}
 		return a.Line < b.Line
 	})
-	res := Result{Findings: c.findings, Definitions: len(c.defs), defined: map[string]bool{}}
-	for id := range c.defs {
+	res := Result{Findings: c.findings, Definitions: len(c.defs), defined: map[string]bool{}, where: map[string]Location{}, parent: map[string]string{}}
+	for id, def := range c.defs {
 		res.defined[id] = true
+		res.where[id] = Location{File: def.file, Line: def.line}
 	}
 	for _, r := range c.rules {
 		if r.cfg.Children == nil {
@@ -198,6 +216,7 @@ func Run(root string, rules *Rules) (Result, error) {
 			}
 			for name := range names {
 				res.defined[parent+r.cfg.Children.Separator+name] = true
+				res.parent[parent+r.cfg.Children.Separator+name] = parent
 			}
 		}
 	}

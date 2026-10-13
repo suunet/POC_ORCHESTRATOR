@@ -23,6 +23,7 @@ type Workflow struct {
 	Human    []Human         `json:"human"`
 	Auto     []Auto          `json:"auto"`
 	Steps    map[string]Step `json:"steps"`
+	Display  *Display        `json:"display,omitempty"` // 監視の UI の段と表示名（M2.8）
 }
 
 // Human は、人が関門のコマンドで行う遷移。Guards は遷移の前に確かめる機械検証の名前。
@@ -219,6 +220,8 @@ func (w *Workflow) validate() []error {
 			errs = append(errs, w.validateRoute(rw, r, state)...)
 		}
 	}
+
+	errs = append(errs, w.validateDisplay()...)
 
 	// 初期の状態から到達できない状態を拒む
 	reach := w.reachable()

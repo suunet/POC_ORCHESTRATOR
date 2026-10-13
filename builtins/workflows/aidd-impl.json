@@ -39,5 +39,33 @@
       "needs_fix": {"loop": "p5", "counter": "review"},
       "needs_human": {"stop": "human"}
     }}
+  },
+  "display": {
+    "stages": [
+      {"id": "draft",       "label": "下書き",   "name": "下書き",     "states": ["draft"]},
+      {"id": "spec-review", "label": "要件審査", "name": "要件の審査", "states": ["ready-to-prepare"], "steps": ["p2-review", "p2-arbitrate"]},
+      {"id": "plan",        "label": "計画",     "name": "計画",       "steps": ["p3-prepare"]},
+      {"id": "approve",     "label": "承認",     "name": "承認",       "states": ["ready-to-approve"]},
+      {"id": "implement",   "label": "実装",     "name": "実装",       "states": ["ready-to-implement", "implementing"], "steps": ["p5"]},
+      {"id": "verify",      "label": "検証",     "name": "検証",       "steps": ["verify"]},
+      {"id": "impl-review", "label": "実装審査", "name": "実装の審査", "steps": ["p5-verify"]},
+      {"id": "review",      "label": "レビュー", "name": "レビュー",   "states": ["ready-for-review"]},
+      {"id": "done",        "label": "完了",     "name": "完了",       "states": ["done"]}
+    ],
+    "roles": {"dev": "DEV", "bj": "BJ", "arb": "ARB", "gateflow": "gateflow", "human": "人"},
+    "states": {
+      "draft": "下書き", "ready-to-prepare": "要件の審査待ち", "ready-to-approve": "承認待ち", "ready-to-implement": "実装待ち",
+      "implementing": "実装中", "ready-for-review": "レビュー待ち", "done": "完了", "cancelled": "中止"
+    },
+    "outcomes": {
+      "approved": "承認", "needs_fix": "差し戻し", "resolved": "裁定済み", "escalated": "人へ回した", "done": "完了",
+      "needs_answer": "質問あり", "test_defect": "テストの誤り", "blocked": "範囲外の変更が要る", "passed": "合格", "failed": "不合格",
+      "needs_human": "人の確認待ち"
+    },
+    "stops": {
+      "error": "エラー", "invalid-output": "出力の不正", "limit-loops": "往復の上限", "limit-steps": "step の上限",
+      "no-progress": "進展なし", "timeout": "時間切れ", "write-failed": "記録を書けない", "interrupted": "中断"
+    },
+    "commands": {"ready": "要件の確定", "approve": "承認", "done": "完了", "cancel": "中止"}
   }
 }

@@ -192,8 +192,20 @@ func (e *Engine) findingsToQuestions(step string) error {
 		qs = append(qs, q)
 	}
 	qs = append(qs, outputQuestions(r.Questions)...)
-	_, err := e.Ticket.AppendQuestions(stepLabel(step), qs)
+	_, err := e.appendQuestions(step, stepLabel(step), qs)
 	return err
+}
+
+// appendQuestions は、質疑に登録し、登録した Q 番号を記録に残す（監視の UI の作業履歴から質疑をたどる。M2.8）。
+func (e *Engine) appendQuestions(step, origin string, qs []ticketQuestion) ([]string, error) {
+	ids, err := e.Ticket.AppendQuestions(origin, qs)
+	if err != nil {
+		return ids, err
+	}
+	if len(ids) > 0 {
+		e.log("questions-added", map[string]any{"step": step, "ids": ids})
+	}
+	return ids, nil
 }
 
 func (e *Engine) p3Questions() error {
@@ -205,7 +217,7 @@ func (e *Engine) p3Questions() error {
 	for _, u := range r.Unfilled {
 		qs = append(qs, ticketQuestion{Summary: summarize(u), Body: "値が決められない観点：" + u})
 	}
-	_, err := e.Ticket.AppendQuestions(stepLabel("p3-prepare"), qs)
+	_, err := e.appendQuestions("p3-prepare", stepLabel("p3-prepare"), qs)
 	return err
 }
 
@@ -271,7 +283,13 @@ func (e *Engine) writeReview(step string) error {
 		}
 	}
 	b.WriteString("\nラベルの扱い：MUST と Q は遷移を止める。IMO は人のコードレビューで提示し、NR は将来の対応の候補として一覧にする。NITS・FYI は記録だけ。\n")
-	return e.writeState(filepath.Join(dir, fmt.Sprintf("%02d-%s.md", len(entries)+1, step)), []byte(b.String()))
+	path := filepath.Join(dir, fmt.Sprintf("%02d-%s.md", len(entries)+1, step))
+	if err := e.writeState(path, []byte(b.String())); err != nil {
+		return err
+	}
+	// 作業履歴から、その回のレビュー報告をたどれるようにする（M2.8）
+	e.log("review-report", map[string]any{"step": step, "path": e.relPath(path)})
+	return nil
 }
 
 func cellText(s string) string {

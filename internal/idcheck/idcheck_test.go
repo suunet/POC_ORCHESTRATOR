@@ -271,3 +271,21 @@ func TestRules_FindIDs(t *testing.T) {
 		t.Errorf("FindIDs = %v", got)
 	}
 }
+
+// Where は、ID の定義のファイルと行を返す（M2.8）。子の ID は親の定義の場所。
+func TestResult_Where(t *testing.T) {
+	res := run(t, baseFiles())
+	for id, want := range map[string]idcheck.Location{
+		"ACT-02":     {File: "docs/actor.md", Line: 6},
+		"UC-003":     {File: "docs/buc.md", Line: 6},
+		"STM-01":     {File: "docs/state.md", Line: 5},
+		"STM-01.下書き": {File: "docs/state.md", Line: 5},
+	} {
+		if got, ok := res.Where(id); !ok || got != want {
+			t.Errorf("Where(%s) = %+v, %v, want %+v", id, got, ok, want)
+		}
+	}
+	if _, ok := res.Where("ACT-99"); ok {
+		t.Error("定義のない ID の場所を返した")
+	}
+}

@@ -401,7 +401,7 @@ func (e *Engine) arbAnswers() error {
 		e.arbQIDs = nil
 		return nil
 	}
-	ids, err := e.Ticket.AppendQuestions("ARB の裁定（P2 の指摘）", qs)
+	ids, err := e.appendQuestions("p2-arbitrate", "ARB の裁定（P2 の指摘）", qs)
 	e.arbQIDs = ids
 	return err
 }
@@ -416,7 +416,7 @@ func (e *Engine) arbEscalate() error {
 		qs = append(qs, ticketQuestion{Summary: summarize(d.Question), Body: strings.TrimSpace(d.Question) + "\n\n対象の指摘：\n\n" + e.decisionBody(d),
 			Mark: "人へ回す（基準：" + criterionText(d.Criterion) + "）"})
 	}
-	_, err := e.Ticket.AppendQuestions("ARB が人へ回したもの（P2 の指摘）", qs)
+	_, err := e.appendQuestions("p2-arbitrate", "ARB が人へ回したもの（P2 の指摘）", qs)
 	return err
 }
 

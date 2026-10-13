@@ -197,3 +197,15 @@ func TestRun_LockedTicketDoesNotRun(t *testing.T) {
 		t.Error("実行の後に印が残っている")
 	}
 }
+
+// 作業履歴のために、レビュー報告のパスと、質疑に登録した Q 番号を記録に残す（M2.8）。
+func TestRun_LogsReviewReportAndQuestions(t *testing.T) {
+	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Fix}})
+	res := mustRun(t, f)
+	log, _ := os.ReadFile(filepath.Join(res.RunDir, "log.jsonl"))
+	for _, w := range []string{`"event":"review-report"`, `"path":"reviews/01-p2-review.md"`, `"event":"questions-added"`, `"ids":["Q-01","Q-02","Q-03"]`} {
+		if !strings.Contains(string(log), w) {
+			t.Errorf("記録に %s がない:\n%s", w, log)
+		}
+	}
+}

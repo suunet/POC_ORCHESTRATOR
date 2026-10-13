@@ -2,6 +2,7 @@ package workflow_test
 
 import (
 	"encoding/json"
+	"io/fs"
 	"strings"
 	"testing"
 
@@ -134,5 +135,48 @@ func TestParse_Loop(t *testing.T) {
 	})
 	if _, err := workflow.Parse(data); err == nil || !strings.Contains(err.Error(), "counter") {
 		t.Fatalf("err = %v, want counter の誤り", err)
+	}
+}
+
+// 組み込みの遷移表は、監視の UI の段と表示名を持ち、どの状態・step も段に入る（M2.8）。
+func TestBuiltin_Display(t *testing.T) {
+	wf, err := workflow.LoadBuiltin(builtins.FS(), "aidd-impl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := wf.Display
+	if d == nil || len(d.Stages) != 9 || d.Stages[1].Label != "要件審査" || d.Stages[1].Name != "要件の審査" {
+		t.Fatalf("display = %+v", d)
+	}
+	if d.StageOfStep("p5-verify") != 6 || d.StageOfState("ready-for-review") != 7 || d.StageOfState("cancelled") != -1 {
+		t.Errorf("段の番号が違う")
+	}
+	if wf.StepRole("verify") != workflow.RoleGateflow || wf.StepRole("p2-review") != "bj" {
+		t.Errorf("担当が違う")
+	}
+}
+
+// 表示名の抜け、段に入らない状態・step、重なる段は、読み込みで拒む（画面で見つけるのでなく）。
+func TestParse_DisplayErrors(t *testing.T) {
+	data, err := fs.ReadFile(builtins.FS(), "workflows/aidd-impl.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]struct{ from, to, want string }{
+		"結果の表示名がない":    {`"needs_fix": "差し戻し", `, ``, `結果 "needs_fix"`},
+		"止まる理由の表示名がない": {`"write-failed": "記録を書けない", `, ``, `止まる理由 "write-failed"`},
+		"step が段に入らない": {`, "steps": ["p5"]}`, `}`, `step "p5" がどの段にも入っていない`},
+		"状態が2つの段に入る":   {`"states": ["done"]}`, `"states": ["done", "draft"]}`, `状態 "draft" は段`},
+		"コマンドの表示名がない":  {`"cancel": "中止"`, `"x": "x"`, `コマンド "cancel"`},
+	}
+	for name, tc := range cases {
+		s := string(data)
+		if !strings.Contains(s, tc.from) {
+			t.Fatalf("%s：置き換える文がない %q", name, tc.from)
+		}
+		_, err := workflow.Parse([]byte(strings.Replace(s, tc.from, tc.to, 1)))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
+		}
 	}
 }
