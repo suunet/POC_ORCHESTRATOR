@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -276,9 +277,10 @@ func (m *Monitor) Source(p string) (SourceFile, error) {
 	if info.IsDir() || info.Size() > sourceLimit {
 		return SourceFile{}, fmt.Errorf("%s は読めない（ディレクトリか、大きすぎる）", p)
 	}
+	// Read は大きさの分を一度に返す約束がないので、ReadFull で全部読む（足りなければ失敗。M2.9）
 	data := make([]byte, info.Size())
-	if _, err := f.Read(data); err != nil && info.Size() > 0 {
-		return SourceFile{}, err
+	if _, err := io.ReadFull(f, data); err != nil {
+		return SourceFile{}, fmt.Errorf("%s を読み切れない: %w", p, err)
 	}
 	return SourceFile{Path: clean, Lines: strings.Split(strings.TrimRight(string(data), "\n"), "\n")}, nil
 }

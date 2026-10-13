@@ -345,3 +345,19 @@ func TestStatus_AgentWaiting(t *testing.T) {
 		}
 	}
 }
+
+// 本文は全部を読む（1回の Read で足りない大きさでも切れない。M2.9）。空のファイルも読める。
+func TestSource_ReadsWholeFile(t *testing.T) {
+	root := fixture(t)
+	big := strings.Repeat("| VAR-99 | 長い行 |\n", 20000) // 数百 KB
+	os.WriteFile(filepath.Join(root, ".docs/design/big.md"), []byte(big), 0o644)
+	os.WriteFile(filepath.Join(root, ".docs/design/empty.md"), nil, 0o644)
+	m := newMonitor(t, root)
+	f, err := m.Source(".docs/design/big.md")
+	if err != nil || len(f.Lines) != 20000 {
+		t.Fatalf("大きいファイル：%d 行, %v", len(f.Lines), err)
+	}
+	if _, err := m.Source(".docs/design/empty.md"); err != nil {
+		t.Errorf("空のファイル：%v", err)
+	}
+}
