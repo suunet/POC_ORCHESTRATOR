@@ -512,6 +512,9 @@ func cmdDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	}
 	fmt.Fprintf(stdout, "サンドボックスの確認：%d件中 不合格 %d件\n", len(results), failed)
 	printProxyLog(stdout, dir, sb.ProxyLog)
+	if sb.CleanupErr != nil {
+		fmt.Fprintf(stdout, "後片付けに失敗した（プロキシ）：%v\n", sb.CleanupErr)
+	}
 	if failed > 0 {
 		return exitFailed
 	}
@@ -539,10 +542,12 @@ func printProxyLog(w io.Writer, dir string, log []byte) {
 		fmt.Fprintf(w, "  %3d %s\n", counts[k], k)
 	}
 	saveDir := filepath.Join(dir, ".docs", "_stash", "doctor")
-	if err := os.MkdirAll(saveDir, 0o755); err == nil {
-		path := filepath.Join(saveDir, time.Now().UTC().Format("20060102-150405")+"-proxy.log")
-		if os.WriteFile(path, log, 0o644) == nil {
-			fmt.Fprintf(w, "  記録：%s\n", path)
-		}
+	path := filepath.Join(saveDir, time.Now().UTC().Format("20060102-150405")+"-proxy.log")
+	if err := os.MkdirAll(saveDir, 0o755); err != nil {
+		fmt.Fprintf(w, "  記録を書けない：%v\n", err)
+	} else if err := os.WriteFile(path, log, 0o644); err != nil {
+		fmt.Fprintf(w, "  記録を書けない：%v\n", err)
+	} else {
+		fmt.Fprintf(w, "  記録：%s\n", path)
 	}
 }

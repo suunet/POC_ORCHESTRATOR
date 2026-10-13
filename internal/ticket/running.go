@@ -23,35 +23,35 @@ type Running struct {
 }
 
 // MarkRunning は、このプロセスの実行中の印を置き、消す関数を返す。書き込みは一時ファイルからの改名で行う。
-func (r *Run) MarkRunning(now time.Time) (func(), error) {
+func (r *Run) MarkRunning(now time.Time) (func() error, error) {
 	pid := os.Getpid()
 	start, err := ProcessStart(pid)
 	if err != nil {
-		return func() {}, err
+		return func() error { return nil }, err
 	}
 	data, err := json.Marshal(Running{PID: pid, Start: start, Since: now.UTC().Format(time.RFC3339)})
 	if err != nil {
-		return func() {}, err
+		return func() error { return nil }, err
 	}
 	path := filepath.Join(r.Dir, RunningFile)
 	tmp, err := os.CreateTemp(r.Dir, RunningFile+".*")
 	if err != nil {
-		return func() {}, err
+		return func() error { return nil }, err
 	}
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		os.Remove(tmp.Name())
-		return func() {}, err
+		return func() error { return nil }, err
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmp.Name())
-		return func() {}, err
+		return func() error { return nil }, err
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		os.Remove(tmp.Name())
-		return func() {}, err
+		return func() error { return nil }, err
 	}
-	return func() { os.Remove(path) }, nil
+	return func() error { return os.Remove(path) }, nil
 }
 
 // DecodeRunning は、実行中の印の中身を読む。

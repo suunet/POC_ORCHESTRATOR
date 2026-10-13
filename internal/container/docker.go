@@ -167,7 +167,9 @@ func (d Docker) Run(ctx context.Context, spec Spec, stdout, stderr io.Writer) (i
 		// NOTE: docker run のクライアントを止めてもコンテナは動き続けるので、名前で消す（時間の上限、呼び出し元の中止のどちらも）
 		rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer rmCancel()
-		d.Exec(rmCtx, "rm", "--force", spec.Name)
+		if _, err := d.Exec(rmCtx, "rm", "--force", spec.Name); err != nil {
+			return 0, errors.Join(cause, fmt.Errorf("コンテナ %s を消せない（残っている）: %w", spec.Name, err))
+		}
 		return 0, cause
 	}
 	var exitErr *exec.ExitError

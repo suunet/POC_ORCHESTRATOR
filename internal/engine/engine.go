@@ -92,6 +92,10 @@ type Engine struct {
 	Builtins   fs.FS
 	Rules      *idcheck.Rules
 	Now        func() time.Time
+	// Stderr は、log.jsonl にも書けないときの出し先（なければ os.Stderr）
+	Stderr io.Writer
+	// MarkRunning は、実行中の印（running.json）を書く。テストで書けない場合を作るために差し替える（M2.8 の Q-04）
+	MarkRunning func(run *ticket.Run, now time.Time) (unmark func() error, err error)
 
 	// 1回の実行の中で、step の結果を後の操作に渡す
 	run        *ticket.Run
@@ -145,9 +149,13 @@ func (e *Engine) followProxy(ctx context.Context, runDir string) func() {
 		cancel()
 		if f != nil {
 			if w.n == 0 && len(logs) > 0 {
-				f.Write(logs)
+				if _, err := f.Write(logs); err != nil {
+					e.writeError(f.Name(), err)
+				}
 			}
-			f.Close()
+			if err := f.Close(); err != nil {
+				e.writeError(f.Name(), err)
+			}
 		}
 		if followErr != nil && !timedOut {
 			e.log("proxy-follow-error", map[string]any{"error": followErr.Error()})
@@ -311,12 +319,24 @@ func (e *Engine) loop(ctx context.Context, st *State, step string) (Result, erro
 		return Result{}, err
 	}
 	e.run = run
-	// 実行の間だけ印を置く（監視の UI が実行中と中断を見分ける）。取り消し（SIGINT・SIGTERM）で終わるときも消す
-	unmark, err := run.MarkRunning(e.Now())
-	if err != nil {
-		e.log("running-mark-error", map[string]any{"error": err.Error()})
+	// 実行の間だけ印を置く（監視の UI が実行中と中断を見分ける）。取り消し（SIGINT・SIGTERM）で終わるときも消す。
+	// 印が書けなければ、監視の UI が実行中のチケットを「止まった」と見せるので、何もせずに止まる（M2.8 の Q-02）
+	mark := e.MarkRunning
+	if mark == nil {
+		mark = (*ticket.Run).MarkRunning
 	}
-	defer unmark()
+	unmark, err := mark(run, e.Now())
+	if err != nil {
+		e.log("write-failed", map[string]any{"file": e.relPath(filepath.Join(run.Dir, ticket.RunningFile)), "error": err.Error()})
+		return Result{Outcome: Stopped, Reason: stopWriteFailed, Status: e.Ticket.Status, RunDir: run.Dir,
+			Message: fmt.Sprintf("実行中の印（%s）を書けない：%v", ticket.RunningFile, err),
+			Next:    "原因を直してから、もう一度実行する"}, nil
+	}
+	defer func() {
+		if err := unmark(); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			e.cleanupError(ticket.RunningFile, err)
+		}
+	}()
 	res, err := e.loopIn(ctx, run, st, step)
 	res.Warnings = append(res.Warnings, e.warnings...)
 	res.RunDir = run.Dir
@@ -330,7 +350,11 @@ func (e *Engine) loop(ctx context.Context, st *State, step string) (Result, erro
 		if st.Resume == "" { // step を始める前（clone の用意など）の失敗は、同じ step から再開する
 			st.Resume = step
 		}
-		st.Save(run.Dir)
+		if serr := st.Save(run.Dir); serr != nil {
+			// 止まった記録が残らないので、標準エラーにも出す
+			fmt.Fprintf(e.stderr(), "gateflow: 実行の記録（%s）を書けない：%v\n", StateFile, serr)
+			err = errors.Join(err, fmt.Errorf("実行の記録（%s）を書けない：%w", StateFile, serr))
+		}
 		return res, err
 	}
 	e.log(string(res.Outcome), map[string]any{"reason": res.Reason, "message": res.Message, "status": string(res.Status)})
@@ -363,7 +387,7 @@ func (e *Engine) loopIn(ctx context.Context, run *ticket.Run, st *State, step st
 		e.warnings = append(e.warnings, fmt.Sprintf("main が進んでいる（%s）が、作業ブランチに自分のコミットがあるので取り込んでいない。作業ブランチは main の古い版の上にある", short(prep.Main)))
 	}
 	allow := append(slices.Clone(e.Agent.Hosts()), e.Project.Agent.Allow...)
-	os.WriteFile(filepath.Join(run.Dir, "allowlist.txt"), []byte(strings.Join(allow, "\n")+"\n"), 0o644)
+	e.writeDiag(filepath.Join(run.Dir, "allowlist.txt"), []byte(strings.Join(allow, "\n")+"\n"))
 	proxyURL, err := e.Egress.Start(ctx, allow)
 	if err != nil {
 		return Result{}, err
@@ -375,10 +399,24 @@ func (e *Engine) loopIn(ctx context.Context, run *ticket.Run, st *State, step st
 	stopped := func(reason, detail, resume string) (Result, error) {
 		st.Stopped = &Stop{Reason: reason, Detail: detail}
 		st.Resume = resume
+		res := Result{Outcome: Stopped, Reason: reason, Message: detail, Next: "原因を直してから gateflow resume " + e.Ticket.ID}
 		if err := st.Save(run.Dir); err != nil {
-			return Result{}, err
+			// 止まった記録（再開の位置）が残らないので、resume でなく実行のやり直しになる（M2.8）
+			fmt.Fprintf(e.stderr(), "gateflow: 実行の記録（%s）を書けない：%v\n", StateFile, err)
+			e.log("write-failed", map[string]any{"file": e.relPath(filepath.Join(run.Dir, StateFile)), "error": err.Error()})
+			res.Reason = stopWriteFailed
+			res.Message = fmt.Sprintf("%s。実行の記録（%s）も書けない：%v", detail, StateFile, err)
+			res.Next = "原因を直してから、もう一度実行する（止まった記録が残っていないので resume できない）"
 		}
-		return Result{Outcome: Stopped, Reason: reason, Message: detail, Next: "原因を直してから gateflow resume " + e.Ticket.ID}, nil
+		return res, nil
+	}
+	// saveOrStop は、状態を保存する。保存できなければ、止まる（再開の位置は resume）
+	saveOrStop := func(resume string) (Result, bool) {
+		if err := st.Save(run.Dir); err != nil {
+			res, _ := stopped(stopWriteFailed, fmt.Sprintf("実行の記録（%s）を書けない：%v", StateFile, err), resume)
+			return res, false
+		}
+		return Result{}, true
 	}
 
 	for {
@@ -394,7 +432,9 @@ func (e *Engine) loopIn(ctx context.Context, run *ticket.Run, st *State, step st
 				return Result{}, err
 			}
 			st.Stopped, st.Resume = nil, ""
-			st.Save(run.Dir)
+			if res, ok := saveOrStop(step); !ok {
+				return res, nil
+			}
 			e.log("arb-limit", map[string]any{"limit": limits.ArbitrateLoops})
 			return Result{Outcome: Gate, Message: fmt.Sprintf("ARB の往復が上限（%d）に達したので、BJ の指摘を人へ回した", limits.ArbitrateLoops),
 				Next: e.next(string(ticket.Draft))}, nil
@@ -430,7 +470,9 @@ func (e *Engine) loopIn(ctx context.Context, run *ticket.Run, st *State, step st
 			e.print = Fingerprint{Hash: hash(failure), Raw: failure, Normalized: failure}
 			route = workflow.Route{Loop: step, Counter: "check-" + step}
 			e.log("check-failed", map[string]any{"step": step, "failure": failure})
-			e.writeFeedback(st, dir, failure)
+			if err := e.writeFeedback(st, dir, failure); err != nil {
+				return stopped(stopWriteFailed, err.(*errStop).detail, step)
+			}
 		}
 
 		switch {
@@ -457,7 +499,9 @@ func (e *Engine) loopIn(ctx context.Context, run *ticket.Run, st *State, step st
 				return stopped("no-progress", reason, route.Loop)
 			}
 			if failure == "" {
-				e.writeFeedback(st, dir, e.feedbackFor(step))
+				if err := e.writeFeedback(st, dir, e.feedbackFor(step)); err != nil {
+					return stopped(stopWriteFailed, err.(*errStop).detail, step)
+				}
 			}
 			step = route.Loop
 		case route.To != "":
@@ -465,7 +509,9 @@ func (e *Engine) loopIn(ctx context.Context, run *ticket.Run, st *State, step st
 				return Result{}, err
 			}
 			st.Stopped, st.Resume = nil, ""
-			st.Save(run.Dir)
+			if res, ok := saveOrStop(step); !ok {
+				return res, nil
+			}
 			if auto, ok := e.Workflow.AutoFrom(route.To); ok && !e.Ticket.Held() {
 				if auto.To != "" {
 					if err := e.setStatus(st, auto.To); err != nil {
@@ -496,8 +542,8 @@ func (e *Engine) noProgress(st *State, counter, dir string) string {
 		}
 		return ""
 	}
-	os.WriteFile(filepath.Join(dir, "fingerprint-raw.txt"), []byte(e.print.Raw), 0o644)
-	os.WriteFile(filepath.Join(dir, "fingerprint-normalized.txt"), []byte(e.print.Normalized), 0o644)
+	e.writeDiag(filepath.Join(dir, "fingerprint-raw.txt"), []byte(e.print.Raw))
+	e.writeDiag(filepath.Join(dir, "fingerprint-normalized.txt"), []byte(e.print.Normalized))
 	prev := st.Prints[counter]
 	st.Prints[counter] = e.print.Hash
 	if prev != "" && prev == e.print.Hash {
@@ -506,14 +552,18 @@ func (e *Engine) noProgress(st *State, counter, dir string) string {
 	return ""
 }
 
-func (e *Engine) writeFeedback(st *State, dir, text string) {
+// writeFeedback は、次の step に渡す差し戻しの内容を書く。次のエージェントの入力なので、書けなければ止める（M2.8 の Q-01）。
+func (e *Engine) writeFeedback(st *State, dir, text string) error {
 	if text == "" {
 		st.Feedback = "" // 差し戻しの内容がない戻り（ARB の裁定の後の P2 など）は、差し戻しとして渡さない
-		return
+		return nil
 	}
 	path := filepath.Join(dir, "feedback.md")
-	os.WriteFile(path, []byte(text), 0o644)
+	if err := e.writeState(path, []byte(text)); err != nil {
+		return err
+	}
 	st.Feedback = path
+	return nil
 }
 
 // setStatus は、gateflow がステータスを書き、関門の記録にも残す。
@@ -544,7 +594,9 @@ func editWarnings(t *ticket.Ticket, last *Event) []string {
 
 func (e *Engine) log(event string, fields map[string]any) {
 	if e.run != nil {
-		// NOTE: 記録の失敗で実行は止めない
-		_ = e.run.Log(e.Now(), event, fields)
+		// NOTE: 記録の失敗で実行は止めないが、黙って捨てずに標準エラーへ出す（M2.8）
+		if err := e.run.Log(e.Now(), event, fields); err != nil {
+			fmt.Fprintf(e.stderr(), "gateflow: 実行の記録（log.jsonl）に書けない：%v（%s）\n", err, event)
+		}
 	}
 }

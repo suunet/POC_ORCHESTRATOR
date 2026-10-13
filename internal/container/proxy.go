@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -115,5 +116,7 @@ func (p *Proxy) record(decision, method, target, reason string) {
 	line, _ := json.Marshal(rec)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.log.Write(append(line, '\n'))
+	if _, err := p.log.Write(append(line, '\n')); err != nil {
+		fmt.Fprintf(os.Stderr, "gateflow-proxy: 判定の記録を書けない: %v\n", err)
+	}
 }

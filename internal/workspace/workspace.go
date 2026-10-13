@@ -345,7 +345,10 @@ func (w *Workspace) Import(ctx context.Context, ticketID, branch string) error {
 		f.Close()
 		return err
 	}
-	f.Close()
+	// 閉じるときの失敗も書き込みの失敗（壊れたバンドルを取り込まない）
+	if err := f.Close(); err != nil {
+		return err
+	}
 	ref := "refs/heads/" + branch
 	if _, err := w.git(ctx, "-c", "core.hooksPath=/dev/null", "fetch", "--quiet", f.Name(), ref+":"+ref); err != nil {
 		return fmt.Errorf("作業ブランチ %s を取り込めない（早送りできない、またはそのブランチを開いている）: %w", branch, err)

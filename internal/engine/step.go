@@ -171,7 +171,7 @@ func (e *Engine) agentStep(ctx context.Context, st *State, step, role, dir strin
 	if err != nil {
 		return "", err
 	}
-	os.WriteFile(filepath.Join(dir, "prompt.md"), []byte("# システムプロンプト（追加分）\n\n"+req.System+"\n\n# ユーザーメッセージ\n\n"+req.Prompt), 0o644)
+	e.writeDiag(filepath.Join(dir, "prompt.md"), []byte("# システムプロンプト（追加分）\n\n"+req.System+"\n\n# ユーザーメッセージ\n\n"+req.Prompt))
 
 	mounts, envFile := e.Workspace.AgentMounts(e.Ticket.ID), filepath.Join(root, e.Project.Agent.EnvTemplate)
 	switch role {
@@ -191,7 +191,10 @@ func (e *Engine) agentStep(ctx context.Context, st *State, step, role, dir strin
 	spec.IdleTimeout = time.Duration(limits.IdleMinutes) * time.Minute
 
 	for attempt := 1; attempt <= 1+outputRetries; attempt++ {
-		os.Remove(filepath.Join(outDir, "result.json"))
+		// 前の回の結果が残ると、それを読んでしまうので、消せなければ止める
+		if err := removeIfExists(filepath.Join(outDir, "result.json")); err != nil {
+			return "", e.writeFailed(filepath.Join(outDir, "result.json"), err)
+		}
 		if role == "arb" && attempt > 1 {
 			if err := e.Workspace.Reset(ctx, e.Ticket.ID); err != nil {
 				return "", err
@@ -210,7 +213,9 @@ func (e *Engine) agentStep(ctx context.Context, st *State, step, role, dir strin
 		outcome, err := e.readOutput(ctx, step, def, dir, seen)
 		if err == nil {
 			if role == "bj" {
-				e.writeReview(step)
+				if err := e.writeReview(step); err != nil {
+					return "", err
+				}
 			}
 			switch step {
 			case "p2-review":
@@ -486,7 +491,9 @@ func (e *Engine) inputs(ctx context.Context, st *State, step, dir string) ([]con
 			return nil, nil, err
 		}
 		diffPath := filepath.Join(dir, "diff.patch")
-		os.WriteFile(diffPath, []byte(diff), 0o644)
+		if err := e.writeState(diffPath, []byte(diff)); err != nil {
+			return nil, nil, err
+		}
 		mounts = append(mounts, bind(diffPath, "/in/diff.patch"))
 		if st.DevResult != "" {
 			mounts = append(mounts, bind(st.DevResult, "/in/dev-result.json"))
@@ -554,7 +561,7 @@ func (e *Engine) verify(ctx context.Context, st *State, dir string) (string, err
 	var all strings.Builder
 	failed := map[string]string{}
 	for _, r := range results {
-		os.WriteFile(filepath.Join(dir, "verify-"+r.Name+".log"), []byte(r.Output), 0o644)
+		e.writeDiag(filepath.Join(dir, "verify-"+r.Name+".log"), []byte(r.Output))
 		fmt.Fprintf(&all, "## %s（終了コード %d）：`%s`\n\n%s\n", r.Name, r.ExitCode, r.Cmd, r.Output)
 		e.log("verify", map[string]any{"name": r.Name, "exitCode": r.ExitCode, "seconds": r.Duration.Seconds()})
 		if r.ExitCode != 0 {
@@ -565,7 +572,9 @@ func (e *Engine) verify(ctx context.Context, st *State, dir string) (string, err
 		return "", err
 	}
 	logPath := filepath.Join(dir, "verify.log")
-	os.WriteFile(logPath, []byte(all.String()), 0o644)
+	if err := e.writeState(logPath, []byte(all.String())); err != nil {
+		return "", err
+	}
 	st.VerifyLog = logPath
 	if passed {
 		return "passed", nil
@@ -621,10 +630,12 @@ func (e *Engine) runLogged(ctx context.Context, spec container.Spec, dir, name s
 	if err != nil {
 		return 0, err
 	}
-	defer stdout.Close()
 	var stderr bytes.Buffer
 	code, runErr := e.Runner.Run(ctx, spec, stdout, &stderr)
-	os.WriteFile(filepath.Join(dir, name+".stderr"), stderr.Bytes(), 0o644)
+	if err := stdout.Close(); err != nil {
+		e.writeError(stdout.Name(), err)
+	}
+	e.writeDiag(filepath.Join(dir, name+".stderr"), stderr.Bytes())
 	return code, runErr
 }
 

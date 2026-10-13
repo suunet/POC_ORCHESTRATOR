@@ -85,6 +85,8 @@ type Sandbox struct {
 	Runner     Runner
 
 	ProxyLog []byte // 実行の後に、プロキシの判定の記録を入れる
+	// CleanupErr は、プロキシを止める・消すときの失敗（呼び出し側が表示する。M2.8）
+	CleanupErr error
 }
 
 const sandboxTicket = "doctor"
@@ -109,7 +111,10 @@ func (s *Sandbox) Run(ctx context.Context) ([]CheckResult, error) {
 		return nil, err
 	}
 	defer func() {
-		s.ProxyLog, _ = s.Egress.Stop(context.WithoutCancel(ctx))
+		var err error
+		if s.ProxyLog, err = s.Egress.Stop(context.WithoutCancel(ctx)); err != nil {
+			s.CleanupErr = err
+		}
 	}()
 	outDir, err := os.MkdirTemp("", "gateflow-doctor-")
 	if err != nil {

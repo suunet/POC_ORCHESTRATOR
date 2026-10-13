@@ -243,14 +243,18 @@ func stepLabel(step string) string {
 	return step
 }
 
-// writeReview は、BJ の出力からレビュー報告（reviews/NN-<step>.md）を作る（Q-20）。
-func (e *Engine) writeReview(step string) {
+// writeReview は、BJ の出力からレビュー報告（reviews/NN-<step>.md）を作る（Q-20）。人が読む記録なので、
+// 書けなければ止める（M2.8）。一覧が読めないと番号が 01 に戻り、既存の報告を上書きしうるので、それも止める。
+func (e *Engine) writeReview(step string) error {
 	r := e.lastReview
 	dir := filepath.Join(filepath.Dir(e.Ticket.Path), "reviews")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return
+		return e.writeFailed(dir, err)
 	}
-	entries, _ := os.ReadDir(dir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return e.writeFailed(dir, err)
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s レビュー報告（%s）\n\nこの報告は、BJ の出力（result.json）から gateflow が作った。\n\n| 項目 | 値 |\n| --- | --- |\n| step | %s |\n| 実施日時 | %s |\n| 結果（outcome） | %s |\n\n## 要約\n\n%s\n\n## 指摘\n\n",
 		e.Ticket.ID, step, step, e.Now().UTC().Format("2006-01-02 15:04:05Z"), r.Outcome, r.Summary)
@@ -267,7 +271,7 @@ func (e *Engine) writeReview(step string) {
 		}
 	}
 	b.WriteString("\nラベルの扱い：MUST と Q は遷移を止める。IMO は人のコードレビューで提示し、NR は将来の対応の候補として一覧にする。NITS・FYI は記録だけ。\n")
-	os.WriteFile(filepath.Join(dir, fmt.Sprintf("%02d-%s.md", len(entries)+1, step)), []byte(b.String()), 0o644)
+	return e.writeState(filepath.Join(dir, fmt.Sprintf("%02d-%s.md", len(entries)+1, step)), []byte(b.String()))
 }
 
 func cellText(s string) string {

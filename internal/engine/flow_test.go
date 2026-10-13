@@ -108,11 +108,15 @@ type flowWorkspace struct {
 	workChangesOnce bool
 	snapshots       int
 	resets          int
-	prepareErr      error // あれば Prepare が返す（clone の用意の失敗）
+	prepareErr      error  // あれば Prepare が返す（clone の用意の失敗）
+	beforePrepare   func() // あれば Prepare の始めに呼ぶ（M2.8）
 }
 
 func (w *flowWorkspace) Prepare(_ context.Context, _, _, _ string, _ *config.Deps, opt workspace.PrepareOptions) (workspace.Prepared, error) {
 	w.prepareOpts = append(w.prepareOpts, opt)
+	if w.beforePrepare != nil {
+		w.beforePrepare()
+	}
 	if w.prepareErr != nil {
 		return workspace.Prepared{}, w.prepareErr
 	}
@@ -182,6 +186,8 @@ type flowRunner struct {
 	specs     map[string][]container.Spec
 	inputs    map[string][]map[string]string // step → 呼ばれるたびの /in のファイルの中身
 	verifyIdx int
+	// onRun は、エージェントの step が走るたびに呼ぶ（stepDir は step の記録のディレクトリ）。書けない状態を作るのに使う（M2.8）
+	onRun func(step, stepDir string)
 }
 
 func newRunner(results map[string][]string) *flowRunner {
@@ -221,6 +227,13 @@ func (f *flowRunner) Run(_ context.Context, spec container.Spec, stdout, _ io.Wr
 		}
 	}
 	f.inputs[step] = append(f.inputs[step], in)
+	if f.onRun != nil {
+		for _, m := range spec.Mounts {
+			if m.Target == "/out" {
+				f.onRun(step, filepath.Dir(m.Source))
+			}
+		}
+	}
 	rs := f.results[step]
 	if len(rs) > 0 {
 		r := rs[min(f.calls[step], len(rs)-1)]

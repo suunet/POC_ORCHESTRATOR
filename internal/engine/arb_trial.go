@@ -64,8 +64,13 @@ func (e *Engine) ARBTrial(ctx context.Context, src, dest string) (TrialResult, e
 	if err := os.MkdirAll(in, 0o755); err != nil {
 		return res, err
 	}
-	os.WriteFile(filepath.Join(in, "review.json"), data, 0o644)
-	os.WriteFile(filepath.Join(in, "forced.json"), []byte(`{"findings":[]}`), 0o644)
+	// ARB に渡す入力なので、書けなければ試験を止める
+	if err := os.WriteFile(filepath.Join(in, "review.json"), data, 0o644); err != nil {
+		return res, err
+	}
+	if err := os.WriteFile(filepath.Join(in, "forced.json"), []byte(`{"findings":[]}`), 0o644); err != nil {
+		return res, err
+	}
 
 	bind := func(src, target string) container.Mount {
 		return container.Mount{Type: container.Bind, Source: src, Target: target, ReadOnly: true}
@@ -100,7 +105,7 @@ func (e *Engine) ARBTrial(ctx context.Context, src, dest string) (TrialResult, e
 	if err != nil {
 		return res, err
 	}
-	os.WriteFile(filepath.Join(dest, "prompt.md"), []byte("# システムプロンプト（追加分）\n\n"+req.System+"\n\n# ユーザーメッセージ\n\n"+req.Prompt), 0o644)
+	e.writeDiag(filepath.Join(dest, "prompt.md"), []byte("# システムプロンプト（追加分）\n\n"+req.System+"\n\n# ユーザーメッセージ\n\n"+req.Prompt))
 
 	allow := append(slices.Clone(e.Agent.Hosts()), e.Project.Agent.Allow...)
 	proxyURL, err := e.Egress.Start(ctx, allow)
@@ -109,8 +114,11 @@ func (e *Engine) ARBTrial(ctx context.Context, src, dest string) (TrialResult, e
 	}
 	e.proxyURL = proxyURL
 	defer func() {
-		logs, _ := e.Egress.Stop(context.WithoutCancel(ctx))
-		os.WriteFile(filepath.Join(dest, ProxyLogFile), logs, 0o644)
+		logs, err := e.Egress.Stop(context.WithoutCancel(ctx))
+		if err != nil {
+			e.cleanupError("proxy", err)
+		}
+		e.writeDiag(filepath.Join(dest, ProxyLogFile), logs)
 	}()
 
 	limits := e.Project.EffectiveLimits()
@@ -139,8 +147,10 @@ func (e *Engine) ARBTrial(ctx context.Context, src, dest string) (TrialResult, e
 		}
 		var stderr strings.Builder
 		code, runErr := e.Runner.Run(ctx, spec, logFile, &stderr)
-		logFile.Close()
-		os.WriteFile(filepath.Join(dest, fmt.Sprintf("agent-%d.stderr", attempt)), []byte(stderr.String()), 0o644)
+		if err := logFile.Close(); err != nil {
+			e.writeError(logFile.Name(), err)
+		}
+		e.writeDiag(filepath.Join(dest, fmt.Sprintf("agent-%d.stderr", attempt)), []byte(stderr.String()))
 		if runErr != nil {
 			return res, runErr
 		}
@@ -169,8 +179,13 @@ func (e *Engine) ARBTrial(ctx context.Context, src, dest string) (TrialResult, e
 		res.OK = true
 		break
 	}
-	if b, err := json.MarshalIndent(res, "", "  "); err == nil {
-		os.WriteFile(filepath.Join(dest, "trial.json"), b, 0o644)
+	// 試験の結果は人が読む記録なので、書けなければ失敗を返す
+	b, err := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		return res, err
+	}
+	if err := os.WriteFile(filepath.Join(dest, "trial.json"), b, 0o644); err != nil {
+		return res, err
 	}
 	return res, nil
 }
