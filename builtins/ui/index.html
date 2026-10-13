@@ -334,7 +334,7 @@ function renderFlow(lanes) {
   const head = el("div", { class: "lane head" }, el("span", {}, "チケット"),
     el("div", { class: "segs" }, ...D.stages.map(s => el("span", {}, s.label))), el("span", {}, "担当といまの様子"));
   box.append(head);
-  if (!lanes.length) box.append(el("div", { class: "empty", style: "padding:10px 0" }, "動いているチケットはない（done・cancelled は出さない）"));
+  if (!lanes.length) box.append(el("div", { class: "empty", style: "padding:10px 0" }, "進行中のチケットはない（完了・中止したものは「最近終わったもの」に出る）"));
   for (const l of lanes) {
     const segs = el("div", { class: "segs" });
     l.segments.forEach((s, i) => {
