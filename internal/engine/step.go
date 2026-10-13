@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -475,6 +476,8 @@ func (e *Engine) inputs(ctx context.Context, st *State, step, dir string) ([]con
 			return nil, nil, err
 		}
 		mounts = append(mounts, bind(path, "/in/templates/uc.md"))
+		// gateflow はホストで動くので、自分の OS をホストの OS として伝える（§4.5 のホストでの確かめのコマンド。M2.9）
+		knowledge = append(knowledge, fmt.Sprintf("ホストの OS は %s（%s）。§4.5 のホストでの確かめ（hostCheck）のコマンドは、この OS で動くものを書く。エージェントのコンテナは Linux で、ホストとは違う", hostOSName(runtime.GOOS), runtime.GOOS))
 		imo, err := e.p2IMO(st)
 		if err != nil {
 			return nil, nil, err
@@ -670,4 +673,17 @@ func (e *Engine) p2IMO(st *State) ([]output.Finding, error) {
 		}
 	}
 	return imo, nil
+}
+
+// hostOSName は、OS の名前（runtime.GOOS）を人の読む名前にする。
+func hostOSName(goos string) string {
+	switch goos {
+	case "darwin":
+		return "macOS"
+	case "linux":
+		return "Linux"
+	case "windows":
+		return "Windows"
+	}
+	return goos
 }

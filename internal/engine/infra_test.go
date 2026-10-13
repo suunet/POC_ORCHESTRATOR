@@ -3,6 +3,9 @@ package engine_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -136,5 +139,15 @@ func TestResume_AfterPrepareError(t *testing.T) {
 	}
 	if last := f.ws.prepareOpts[len(f.ws.prepareOpts)-1]; len(last.Own) != 1 || last.Own[0] != "c1" {
 		t.Errorf("記録が引き継がれていない: %v", last.Own)
+	}
+}
+
+// P3 には、ホストの OS（gateflow が動いている OS）を伝える（ホストでの確かめのコマンドのため。M2.9）。
+func TestRun_P3KnowsHostOS(t *testing.T) {
+	f := newFlow(t, infraTicket, map[string][]string{"p2-review": {p2Approved}, "p3-prepare": {p3Infra}})
+	res := mustRun(t, f)
+	prompt, _ := os.ReadFile(filepath.Join(res.RunDir, "steps", "02-p3-prepare", "prompt.md"))
+	if !strings.Contains(string(prompt), "ホストの OS は") || !strings.Contains(string(prompt), "（"+runtime.GOOS+"）") {
+		t.Errorf("P3 のプロンプトにホストの OS がない:\n%s", prompt)
 	}
 }
