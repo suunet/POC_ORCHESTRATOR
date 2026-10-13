@@ -49,7 +49,7 @@ stateDiagram-v2
   draft --> ready_to_prepare: 人 gateflow ready（未確定の質疑0件）
   ready_to_prepare --> ready_to_approve: P2（BJ）→ P3（DEV）
   ready_to_prepare --> draft: P2の指摘を質疑に変換
-  ready_to_approve --> ready_to_implement: 人 gateflow approve（§4.5）
+  ready_to_approve --> ready_to_implement: 人 gateflow approve（§4.6）
   ready_to_implement --> implementing: gateflow（キューの順番）
   implementing --> ready_for_review: P5（テスト→実装）→ 自動ゲート → P5後（BJ）
   ready_for_review --> in_uat: 人 レビューOK・push・PR・デプロイ・gateflow uat
@@ -67,7 +67,7 @@ AI同士の遷移（P2→P3、P5→P5後など）はgateflowが自動で進め�
 | --- | --- | --- | --- |
 | `draft` | 質疑の回答待ち | `ready-to-prepare` | 人（`gateflow ready`。未確定の質疑が0件であることを確認） |
 | `ready-to-prepare` | gateflowがP2（BJ）→P3（DEV）を実行 | `ready-to-approve`／指摘があれば質疑に変換して`draft` | gateflow |
-| `ready-to-approve` | 実装の許可待ち | `ready-to-implement` | 人（`gateflow approve`。§4.5の承認＝キューへの登録。着手宣言は廃止） |
+| `ready-to-approve` | 実装の許可待ち | `ready-to-implement` | 人（`gateflow approve`。§4.6の承認＝キューへの登録。着手宣言は廃止） |
 | `ready-to-implement` | 実装待ち（保留の印を付けられる） | `implementing` | gateflow |
 | `implementing` | P5（テスト→実装）→自動ゲート→P5後（BJ） | `ready-for-review` | gateflow |
 | `ready-for-review` | 人のコードレビュー。OKなら人がpush・PR作成・develop/stgへのデプロイ | `in-uat`／`feedback`／`done` | 人（`gateflow uat`。`done`は、人が git で main へマージした後の`gateflow done`） |
@@ -94,8 +94,8 @@ AI同士の遷移（P2→P3、P5→P5後など）はgateflowが自動で進め�
 
 | 分類 | 戻り先 |
 | --- | --- |
-| 要件漏れ | 正本を直して`ready-to-prepare`（§4.5を取り直す） |
-| 設計の欠陥 | 正本を直して`ready-to-prepare`（§4.5を取り直す） |
+| 要件漏れ | 正本を直して`ready-to-prepare`（§4.6を取り直す） |
+| 設計の欠陥 | 正本を直して`ready-to-prepare`（§4.6を取り直す） |
 | 実装の欠陥 | `ready-to-implement`（軽量な経路。承認は取り直さない） |
 | テストの欠陥 | P3のテスト設計からやり直す（`ready-to-prepare`） |
 | 要望 | このチケットでは扱わず、新しい要件依頼書にする |
@@ -141,14 +141,14 @@ AIはCLIの非対話実行で呼び出し、Claude CodeとCursorのどちらを�
 | 遷移 | 機械検証（必須） | AIの判定 |
 | --- | --- | --- |
 | P1 → draft | 指示書の§1§2が埋まっている。質疑の各項目にIDが対応している | 不要 |
-| draft → ready-to-prepare（人） | 未確定の質疑が0件 | 不要 |
+| draft → ready-to-prepare（人） | 未確定の質疑が0件。指示書の種別が「実装」か「基盤」 | 不要 |
 | P2（BJのレビュー） | 出力がスキーマに合う。指摘が参照するIDがカタログに実在する | 承認／要修正 |
-| P3 → ready-to-approve | §3§4が埋まっている。受入条件がすべてユースケースのIDに対応する。ID整合チェックに合格 | 不要 |
-| ready-to-approve →（人） | §4.5のチェックがすべて入っている | 不要 |
+| P3 → ready-to-approve | §3§4が埋まっている。種別が実装なら、受入条件が1件以上で、すべてユースケースのIDに対応する。種別が基盤なら、受入条件は0件で、§4.5のホストでの確かめ（コードレビューで読むものと、ホストでの手順と合格の基準）がある。ID整合チェックに合格 | 不要 |
+| ready-to-approve →（人） | §4.6のチェックがすべて入っている | 不要 |
 | P5（実装） | ビルド・テスト・lintに合格。コミットメッセージにT-NNNがある | DEVの完了報告 |
 | P5後（BJの突合） | ID整合チェックに合格 | 指示書・設計書とdiffの乖離の有無 |
 | FBの分類 →（人） | 未確定の質問が0件。要件・設計の変更なら正本の差分がある | 分類の案と質問の生成 |
-| done | mainにT-NNNを含むコミットがある | 不要 |
+| done | mainにT-NNNを含むコミットがある。§4.5にホストでの確かめがあれば、§5に結果が書かれている | 不要 |
 
 検証に失敗した場合：出力がスキーマに合わなければ1回だけ再実行し、それでも失敗すれば人の確認待ちにする。機械検証に不合格なら、失敗の内容を付けて同じstepに差し戻す。
 
@@ -182,8 +182,11 @@ AIはCLIの非対話実行で呼び出し、Claude CodeとCursorのどちらを�
 | 単体テスト | 自動（P5） | 関数ごとの動作。入力の検査（必須・桁数・形式・境界値など） | 観点表のうち関数で検証できるもの |
 | シナリオテスト | 自動（P5） | 受入条件ごとの正常系を、外から使われる関数（ハンドラ・ユースケース）の呼び出しの連結で確認する。DBは共有のサービスを使い、外部サービスはモックにする | 受入条件 |
 | UAT | 手動（業務チーム） | 受入条件の確認と、画面でしか確認できない観点 | 受入条件、観点表の画面の観点 |
+| ホストでの確かめ | 手動（人の代わりにホストで作業するAI。gateflowの外。`ready-for-review`の後） | gateflowの中で確かめられない動作（コンテナの起動など）。ホストで動かす前に、コードレビューでホストに影響する設定（ホストのフォルダを繋ぐ設定、特権での実行、外へ公開するポート）を確かめる。結果は指示書の§5に書く | §4.5 |
 
 - 受入条件はユースケース仕様に節を設けて`UC-003-AC-02`の形で発番し、テストの名前かコメントにIDを入れる
+- 指示書の種別は「実装」と「基盤」の2つ（ドキュメントの種別は、UATを入れるM4で足す）。実装のチケットは受入条件とテストケースを1件以上持ち、ホストでの確かめを書いてもよい。基盤のチケットは受入条件を持たず、テストケースは0件でよく、§4.5にホストでの確かめを必ず書く。対象IDに何を挙げたか（UCを含む）は種別を変えない（何を参照するかと、どう確かめるかを切り離す。2026-10-13）
+- 設定ファイルに特定の文字が書いてあるかを確かめるだけのテストは作らない（書いた内容をもう一度読むだけで、動くかを確かめないため）。意味のあるテストが書けるとき（Goのコードを変えたときなど）は書く
 - P5は`p5-test`（テストを先に書き、新しいテストが失敗することを確認）と`p5-implement`（`p5-test`で書いたテストのファイルの変更を禁止）に分ける。テストの誤りは`test_defect`で報告し、人の確認待ちにする
 - E2Eテストは作らない。カバレッジは記録だけで、条件にしない
 - テストの規約（`testing.md`）はプロジェクトの層に置き、初回はAIが既存のテストから案を作る
@@ -197,8 +200,8 @@ AIはCLIの非対話実行で呼び出し、Claude CodeとCursorのどちらを�
 | step | 担当 | `outcome`の選択肢 | 固有の項目 |
 | --- | --- | --- | --- |
 | `p2-review` | BJ | `approved`／`needs_fix` | `findings` |
-| `p3-prepare` | DEV | `done`／`needs_answer` | `current`（§3の現状）、`plan`（§4.1の方針）、`acceptance`、`testCases`、`sheets`（更新対象のシート）、`unfilled`（埋められなかった観点の値）。指示書への書き込みはgateflowが行う（2026-10-12、M2のQ-03） |
-| `p5-test` | DEV | `done`／`test_defect`／`blocked` | `tests`（テストと受入条件のIDの対応） |
+| `p3-prepare` | DEV | `done`／`needs_answer` | `current`（§3の現状）、`plan`（§4.1の方針）、`acceptance`、`testCases`、`sheets`（更新対象のシート）、`hostCheck`（§4.5のホストでの確かめ：ホストで動かす前にコードレビューで読むものと、ホストでの手順と合格の基準。種別が基盤なら必須）、`unfilled`（埋められなかった観点の値）。指示書への書き込みはgateflowが行う（2026-10-12、M2のQ-03） |
+| `p5-test` | DEV | `done`／`test_defect`／`blocked` | `tests`（テストと受入条件のIDの対応。§4.3が0件なら空でよい） |
 | `p5-implement` | DEV | `done`／`test_defect`／`blocked` | `changedSheets`、`blockReason` |
 | `p5-verify` | BJ | `approved`／`needs_fix`／`needs_human` | `findings` |
 | `fb-questions` | BJ | `done` | `items`（FBの1件ごとの分類の案と関係するID）、`questions` |
@@ -346,6 +349,7 @@ MVPは「HYDRAを要件から作り直すのに最低限必要な機能」とし
 | M2 流れを通す | 遷移表、状態の2層管理、人間関門のコマンド、上限（時間以外）と進展なしの検知、差し戻しのループ、`status`、ダミーのAI | 1件がP2→P3→P5→P5後→`ready-for-review`まで、関門以外の介入なしで進む |
 | M2.5 監視 UI（完了。2026-10-12） | 読み取り専用のローカルの監視 UI（`gateflow monitor`）。`127.0.0.1`だけで待ち受け、口は`GET /`（埋め込みの HTML 1枚）と`GET /api/status`（JSON）だけで、GET 以外は 405。読むのはプロジェクトの tickets の下の記録だけ。実行中の run の印（`running.json`：プロセス ID とその開始時刻）と、step・試行の開始の記録、プロキシの判定の逐次の記録。`done`のチケットは出さない。あわせて`gateflow done`と、遷移表にない状態のチケットを`gateflow check`が報告する検査（cancel の特例は作らず、遷移表に移行の行を足すか人がステータスを直す） | 実行中のチケットの step・試行の回数・経過時間と上限・往復の回数・直近のイベント・プロキシの拒否・エージェントの直近のツール呼び出しと、人を待っているチケットの止まった理由と次の操作が、1画面で分かる |
 | M2.6 裁定役（ARB）（試行して見送り。2026-10-13） | P2 の差し戻しを、人の前に別の AI の役（ARB）が正本を根拠に裁定する step（`p2-arbitrate`）、出力の検査、契約の ID の守り（`project.json`の`contracts`）、既存の差し戻しで試す`arb-trial`。見送りの理由：試験で人の判断を減らせたのは 5〜7% で、人の回答の読み広げを根拠の種類では止められなかった。実装と試験の正解表は新しいモデルの評価のために残し、遷移表の P2 の差し戻しは元の「質疑に登録して draft へ」に戻した | — |
+| M2.7 基盤のチケット | 指示書の種別（実装・基盤）と`ready`での検査、基盤のチケットの受入条件0件、§4.5のホストでの確かめ（P3の出力の`hostCheck`）、承認の§4.6への移動、§5のホストでの確かめの結果と`done`での検査、§4.3が0件のときのP5のテスト0件 | 種別が基盤のT-003がP3を通り、§4.5にホストでの確かめが書かれる |
 | M3 検証を固める | ID整合チェック、受入条件のテスト、P5の2分割、必須と推奨、規約の目次、`touchMap`、DBなどのサービス（共有方式。composeのサービスを内部ネットワークへ） | テストを書き換えて通そうとした場合に止まることを、わざと起こして確認 |
 | M4 差し戻しと完了 | UATシート、FBの取り込みと分類、戻り先への遷移、`done`の検出、アーカイブ | UATの差し戻しを1件、正本へ反映してから`done`まで通す |
 | M5 入口 | `new`、要件依頼書のスキル、`new --from` | 要件依頼書から`draft`を始められる |
