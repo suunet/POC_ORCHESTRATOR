@@ -98,12 +98,13 @@ type Engine struct {
 	proxyURL   string
 	lastP3     *output.P3Result
 	lastReview *output.ReviewResult
-	print      Fingerprint     // 直前の step が作った、進展なしの判定の指紋
-	findings   []string        // 直前の BJ の指摘の指紋
-	lastBlock  string          // 直前の P5 の blocked の理由
-	lastVerify string          // 直前の検証の出力
-	warnings   []string        // 実行の中で見つけた、止めない警告
-	planned    map[string]bool // BJ の根拠に使われた、予定の ID（Q-24）
+	p3IMO      []output.Finding // P3 に渡した P2 の IMO
+	print      Fingerprint      // 直前の step が作った、進展なしの判定の指紋
+	findings   []string         // 直前の BJ の指摘の指紋
+	lastBlock  string           // 直前の P5 の blocked の理由
+	lastVerify string           // 直前の検証の出力
+	warnings   []string         // 実行の中で見つけた、止めない警告
+	planned    map[string]bool  // BJ の根拠に使われた、予定の ID（Q-24）
 	lastARB    *output.ARBResult
 	arbForced  []int    // 進展なしで人へ回す指摘の番号（M2.6）
 	arbQIDs    []string // ARB の裁定を書いた質疑の番号（コミットのメッセージに使う）

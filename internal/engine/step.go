@@ -42,7 +42,7 @@ var stepDefs = map[string]stepDef{
 		return r.Outcome, nil
 	}},
 	"p3-prepare": {"prompts/instructions/p3-prepare.md", output.DescribeP3, func(e *Engine, d []byte) (string, error) {
-		r, err := output.ParseP3(d, e.Ticket.Kind == ticket.KindInfrastructure)
+		r, err := output.ParseP3(d, e.Ticket.Kind == ticket.KindInfrastructure, len(e.p3IMO))
 		if err != nil {
 			return "", err
 		}
@@ -466,6 +466,20 @@ func (e *Engine) inputs(ctx context.Context, st *State, step, dir string) ([]con
 			return nil, nil, err
 		}
 		mounts = append(mounts, bind(path, "/in/templates/uc.md"))
+		imo, err := e.p2IMO(st)
+		if err != nil {
+			return nil, nil, err
+		}
+		e.p3IMO = imo
+		if len(imo) > 0 {
+			data, _ := json.MarshalIndent(map[string][]output.Finding{"imo": imo}, "", "  ")
+			imoPath := filepath.Join(dir, "p2-imo.json")
+			if err := os.WriteFile(imoPath, data, 0o644); err != nil {
+				return nil, nil, err
+			}
+			mounts = append(mounts, bind(imoPath, "/in/p2-imo.json"))
+			knowledge = append(knowledge, fmt.Sprintf("P2 の IMO（止めない指摘。%d 件）は`/in/p2-imo.json`。1件ずつ、計画に入れるか、理由を付けて見送るかを`imo`に書く", len(imo)))
+		}
 	case "p5-verify":
 		diff, err := e.Workspace.Diff(ctx, t.ID, e.Project.Branch.Main)
 		if err != nil {
@@ -617,4 +631,28 @@ func (e *Engine) runLogged(ctx context.Context, spec container.Spec, dir, name s
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+// p2IMO は、この実行の P2 の出力（承認されたもの）から、IMO の指摘を返す（M2.7）。P2 の出力がなければ空。
+func (e *Engine) p2IMO(st *State) ([]output.Finding, error) {
+	r := e.lastReview
+	if r == nil && st.Review != "" { // resume で P3 から再開したとき
+		data, err := os.ReadFile(st.Review)
+		if err != nil {
+			return nil, err
+		}
+		if r, err = output.ParseP2(data); err != nil {
+			return nil, err
+		}
+	}
+	if r == nil {
+		return nil, nil
+	}
+	var imo []output.Finding
+	for _, f := range r.Findings {
+		if f.Label == "IMO" {
+			imo = append(imo, f)
+		}
+	}
+	return imo, nil
 }

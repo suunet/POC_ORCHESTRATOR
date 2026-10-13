@@ -79,7 +79,7 @@ func TestParseP3_Done(t *testing.T) {
 	  "testCases": [{"test": "TestLog_Fields", "layer": "scenario", "targets": ["UC-001-AC-02"], "content": "項目を確かめる"}],
 	  "sheets": [{"file": ".docs/design/uc/UC-001.md", "change": "受入条件を足す"}],
 	  "unfilled": []
-	}`), false)
+	}`), false, 0)
 	if err != nil {
 		t.Fatalf("ParseP3: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestParseP3_Invalid(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := output.ParseP3([]byte(tc.data), false)
+			_, err := output.ParseP3([]byte(tc.data), false, 0)
 			if err == nil {
 				t.Fatal("want error")
 			}
@@ -129,7 +129,7 @@ const p3Infra = `{"outcome": "done", "summary": "準備した", "current": "c", 
     "steps": [{"action": "docker compose up -d", "pass": "GET /health が 200"}]}}`
 
 func TestParseP3_Infra(t *testing.T) {
-	r, err := output.ParseP3([]byte(p3Infra), true)
+	r, err := output.ParseP3([]byte(p3Infra), true, 0)
 	if err != nil {
 		t.Fatalf("ParseP3: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestParseP3_Infra(t *testing.T) {
 		t.Errorf("r = %+v", r)
 	}
 	// 種別が実装なら、受入条件がない出力は今のとおり不正
-	if _, err := output.ParseP3([]byte(p3Infra), false); err == nil || !strings.Contains(err.Error(), "acceptance") {
+	if _, err := output.ParseP3([]byte(p3Infra), false, 0); err == nil || !strings.Contains(err.Error(), "acceptance") {
 		t.Errorf("実装で受入条件なし: %v", err)
 	}
 }
@@ -154,7 +154,7 @@ func TestParseP3_InfraInvalid(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := output.ParseP3([]byte(tc.data), true)
+			_, err := output.ParseP3([]byte(tc.data), true, 0)
 			if err == nil {
 				t.Fatal("want error")
 			}
@@ -179,5 +179,32 @@ func TestDescribe_NewSteps(t *testing.T) {
 	}
 	if !strings.Contains(output.DescribeP2(), "`findings[].evidence.file`") || !strings.Contains(output.DescribeP3(), "`acceptance[].id`") {
 		t.Error("入れ子の項目の説明がない")
+	}
+}
+
+// P2 の IMO には、P3 が1件ずつ対応（計画に入れた・見送った）を書く。漏れ・重なり・理由なしは不正。
+func TestParseP3_IMO(t *testing.T) {
+	ok := strings.Replace(p3Infra, `"plan": "p",`, `"plan": "p", "imo": [{"index": 0, "decision": "planned", "detail": "§4.1 に書いた"}, {"index": 1, "decision": "deferred", "detail": "範囲外"}],`, 1)
+	r, err := output.ParseP3([]byte(ok), true, 2)
+	if err != nil || len(r.IMO) != 2 {
+		t.Fatalf("ParseP3: %v", err)
+	}
+	cases := map[string]struct {
+		data string
+		want string
+	}{
+		"1件漏れ":   {strings.Replace(ok, `, {"index": 1, "decision": "deferred", "detail": "範囲外"}`, ``, 1), "IMO 1"},
+		"範囲の外":   {strings.Replace(ok, `"index": 1`, `"index": 2`, 1), "範囲"},
+		"理由がない":  {strings.Replace(ok, `"detail": "範囲外"`, `"detail": ""`, 1), "imo[1].detail"},
+		"対応の選択肢": {strings.Replace(ok, `"deferred"`, `"later"`, 1), "later"},
+	}
+	for name, tc := range cases {
+		if _, err := output.ParseP3([]byte(tc.data), true, 2); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// IMO がなければ、imo は書かなくてよい
+	if _, err := output.ParseP3([]byte(p3Infra), true, 0); err != nil {
+		t.Errorf("IMO なし: %v", err)
 	}
 }

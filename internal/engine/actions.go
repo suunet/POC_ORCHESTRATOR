@@ -76,6 +76,12 @@ func (e *Engine) writeSections() error {
 	for _, sh := range r.Sheets {
 		s.Sheets = append(s.Sheets, ticket.SheetRow{File: sh.File, Change: sh.Change})
 	}
+	decision := map[string]string{"planned": "計画に入れた", "deferred": "見送った"}
+	for _, m := range r.IMO {
+		if m.Index >= 0 && m.Index < len(e.p3IMO) {
+			s.IMO = append(s.IMO, ticket.IMORow{Finding: e.p3IMO[m.Index].Finding, Decision: decision[m.Decision], Detail: m.Detail})
+		}
+	}
 	if h := r.HostCheck; h != nil {
 		s.HostCheck = &ticket.HostCheck{Review: h.Review}
 		for _, st := range h.Steps {

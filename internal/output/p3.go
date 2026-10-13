@@ -41,25 +41,34 @@ type HostCheckStep struct {
 	Pass   string `json:"pass" desc:"何を見れば合格か"`
 }
 
+// IMOResponse は、P2 の IMO の1件への対応。
+type IMOResponse struct {
+	Index    int    `json:"index" desc:"/in/p2-imo.json の IMO の番号（0 から数える）"`
+	Decision string `json:"decision" desc:"planned（計画に入れた）か deferred（見送った）" enum:"planned,deferred"`
+	Detail   string `json:"detail" desc:"planned なら §4 のどこに入れたか、deferred なら見送った理由"`
+}
+
 // P3Result は、p3-prepare の出力。gateflow が指示書の§3・§4に書く（§4.6 は人が書く）。
 type P3Result struct {
-	Outcome    string       `json:"outcome" desc:"結果" enum:"done,needs_answer"`
-	Summary    string       `json:"summary" desc:"行ったことの要約"`
-	Questions  []Question   `json:"questions,omitempty" desc:"人に確かめたいこと（推測で埋めない）。needs_answer なら1件以上"`
-	Notes      []string     `json:"notes,omitempty" desc:"補足"`
-	Current    string       `json:"current,omitempty" desc:"§3 変更前の現状（影響の範囲、関係するカタログ）"`
-	Plan       string       `json:"plan,omitempty" desc:"§4.1 方針"`
-	Acceptance []Acceptance `json:"acceptance,omitempty" desc:"§4.2 受入条件。種別が実装なら1件以上、基盤なら書かない"`
-	TestCases  []TestCase   `json:"testCases,omitempty" desc:"§4.3 テストケース。受入条件ごとにシナリオテストが1件以上。種別が基盤なら0件でよい"`
-	Sheets     []Sheet      `json:"sheets,omitempty" desc:"§4.4 P5 で更新してよい文書"`
-	HostCheck  *HostCheck   `json:"hostCheck,omitempty" desc:"§4.5 ホストでの確かめ（gateflow の中で確かめられない動作を、ready-for-review の後にホストで確かめる）。種別が基盤なら必須、実装なら要るときだけ"`
-	Unfilled   []string     `json:"unfilled,omitempty" desc:"埋められなかった観点の値（質疑にもする）"`
+	Outcome    string        `json:"outcome" desc:"結果" enum:"done,needs_answer"`
+	Summary    string        `json:"summary" desc:"行ったことの要約"`
+	Questions  []Question    `json:"questions,omitempty" desc:"人に確かめたいこと（推測で埋めない）。needs_answer なら1件以上"`
+	Notes      []string      `json:"notes,omitempty" desc:"補足"`
+	Current    string        `json:"current,omitempty" desc:"§3 変更前の現状（影響の範囲、関係するカタログ）"`
+	Plan       string        `json:"plan,omitempty" desc:"§4.1 方針"`
+	Acceptance []Acceptance  `json:"acceptance,omitempty" desc:"§4.2 受入条件。種別が実装なら1件以上、基盤なら書かない"`
+	TestCases  []TestCase    `json:"testCases,omitempty" desc:"§4.3 テストケース。受入条件ごとにシナリオテストが1件以上。種別が基盤なら0件でよい"`
+	Sheets     []Sheet       `json:"sheets,omitempty" desc:"§4.4 P5 で更新してよい文書"`
+	IMO        []IMOResponse `json:"imo,omitempty" desc:"P2 の IMO（/in/p2-imo.json）の1件ずつへの対応。IMO があれば全件に1件ずつ"`
+	HostCheck  *HostCheck    `json:"hostCheck,omitempty" desc:"§4.5 ホストでの確かめ（gateflow の中で確かめられない動作を、ready-for-review の後にホストで確かめる）。種別が基盤なら必須、実装なら要るときだけ"`
+	Unfilled   []string      `json:"unfilled,omitempty" desc:"埋められなかった観点の値（質疑にもする）"`
 }
 
 var acceptanceID = regexp.MustCompile(`^(UC-[0-9]{3})-AC-[0-9]{2}$`)
 
-// ParseP3 は、p3-prepare の出力を読み込んで検査する。infra は指示書の種別が基盤か（M2.7）。
-func ParseP3(data []byte, infra bool) (*P3Result, error) {
+// ParseP3 は、p3-prepare の出力を読み込んで検査する。infra は指示書の種別が基盤か（M2.7）、
+// imo は P3 に渡した P2 の IMO の件数（done なら、その1件ずつに対応が要る）。
+func ParseP3(data []byte, infra bool, imo int) (*P3Result, error) {
 	var r P3Result
 	if err := decodeStrict(data, &r); err != nil {
 		return nil, err
@@ -125,6 +134,26 @@ func ParseP3(data []byte, infra bool) (*P3Result, error) {
 	for i, s := range r.Sheets {
 		if s.File == "" {
 			add("sheets[%d].file がない", i)
+		}
+	}
+	seenIMO := map[int]int{}
+	for i, m := range r.IMO {
+		if m.Index < 0 || m.Index >= imo {
+			add("imo[%d].index %d が P2 の IMO の範囲（%d 件）の外", i, m.Index, imo)
+		}
+		seenIMO[m.Index]++
+		if m.Decision != "planned" && m.Decision != "deferred" {
+			add("imo[%d].decision %q は planned・deferred のどちらでもない", i, m.Decision)
+		}
+		if strings.TrimSpace(m.Detail) == "" {
+			add("imo[%d].detail がない（計画に入れた場所か、見送った理由）", i)
+		}
+	}
+	if r.Outcome == "done" {
+		for i := 0; i < imo; i++ {
+			if seenIMO[i] != 1 {
+				add("P2 の IMO %d への対応が imo にちょうど1件ない（%d 件）", i, seenIMO[i])
+			}
 		}
 	}
 	if h := r.HostCheck; h != nil {

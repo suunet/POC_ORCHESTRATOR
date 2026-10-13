@@ -437,7 +437,10 @@ func TestRun_EvidenceInputs(t *testing.T) {
 		  {"label": "IMO", "finding": "a", "evidence": {"file": "/in/ticket.md", "line": 3}},
 		  {"label": "IMO", "finding": "b", "evidence": {"file": "/in/policies/.docs/operations/policies/coding.md", "line": 1}},
 		  {"label": "IMO", "finding": "c", "evidence": {"file": ".docs/operations/policies/coding.md", "line": 1}}]}`},
-		"p3-prepare": {p3Done},
+		// P2 の IMO には P3 が1件ずつ対応を書く（M2.7）
+		"p3-prepare": {strings.Replace(p3Done, `"plan": "common/log に作る",`, `"plan": "common/log に作る", "imo": [
+		  {"index": 0, "decision": "deferred", "detail": "範囲外"}, {"index": 1, "decision": "deferred", "detail": "範囲外"},
+		  {"index": 2, "decision": "deferred", "detail": "範囲外"}],`, 1)},
 	})
 	f.e.Project.Policies[0].Roles = []string{"dev", "bj"}
 	res := mustRun(t, f)

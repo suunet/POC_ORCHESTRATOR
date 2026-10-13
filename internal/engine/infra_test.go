@@ -69,3 +69,22 @@ func TestHuman_DoneNeedsHostCheckResult(t *testing.T) {
 		t.Fatalf("done: %v, status %s", err, f.status(t))
 	}
 }
+
+// P2 の IMO は P3 に渡り、P3 の対応が §4.1 の末尾の表に書かれる。対応がなければ出力の不正。
+func TestRun_P2IMOToP3(t *testing.T) {
+	p2IMO := `{"outcome": "approved", "summary": "止める指摘なし",
+	  "findings": [{"label": "IMO", "finding": "COPY は名指しにする", "evidence": {"id": "UC-001"}}]}`
+	p3 := strings.Replace(p3Infra, `"plan": "compose と Dockerfile を足す",`, `"plan": "compose と Dockerfile を足す", "imo": [{"index": 0, "decision": "planned", "detail": "§4.1 の Dockerfile の方針"}],`, 1)
+	f := newFlow(t, infraTicket, map[string][]string{"p2-review": {p2IMO}, "p3-prepare": {p3Infra, p3}})
+	res := mustRun(t, f)
+	if f.status(t) != ticket.ReadyToApprove || f.runner.calls["p3-prepare"] != 2 {
+		t.Fatalf("res = %+v, status %s, P3 の呼び出し %d（1回目は IMO への対応がなく不正）", res, f.status(t), f.runner.calls["p3-prepare"])
+	}
+	if in := f.runner.inputs["p3-prepare"][0]["/in/p2-imo.json"]; !strings.Contains(in, "COPY は名指しにする") {
+		t.Errorf("P3 に IMO が渡っていない: %q", in)
+	}
+	f.reload(t)
+	if !strings.Contains(f.e.Ticket.Body, "| COPY は名指しにする | 計画に入れた | §4.1 の Dockerfile の方針 |") {
+		t.Errorf("§4.1 に IMO への対応がない:\n%s", f.e.Ticket.Body)
+	}
+}

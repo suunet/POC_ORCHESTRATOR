@@ -19,6 +19,9 @@ type HostCheck struct {
 }
 type HostCheckStep struct{ Action, Pass string }
 
+// IMORow は、P2 の IMO の1件と、P3 の対応（§4.1 の末尾の表の1行）。
+type IMORow struct{ Finding, Decision, Detail string }
+
 // Sections は、P3 の結果から gateflow が書く§3・§4.1〜§4.5 の中身。§4.6 は人が書くので持たない。
 type Sections struct {
 	Current    string
@@ -27,6 +30,7 @@ type Sections struct {
 	TestCases  []TestCaseRow
 	Sheets     []SheetRow
 	HostCheck  *HostCheck // なければ §4.5 に「なし」と書く
+	IMO        []IMORow   // P2 の IMO への対応。あれば §4.1 の末尾に表で書く
 }
 
 // 節の見出しの始まり。中身は見出しの次の行から、次の見出しの前まで。
@@ -73,7 +77,7 @@ func (t *Ticket) WriteSections(s Sections) error {
 	body := string(data)
 	for head, content := range map[string]string{
 		headCurrent:    strings.TrimSpace(s.Current) + "\n",
-		headPlan:       strings.TrimSpace(s.Plan) + "\n",
+		headPlan:       strings.TrimSpace(s.Plan) + "\n" + imoText(s.IMO),
 		headAcceptance: acc.String(),
 		headTestCases:  tests.String(),
 		headSheets:     sheets.String(),
@@ -89,6 +93,19 @@ func (t *Ticket) WriteSections(s Sections) error {
 	}
 	t.Body = body
 	return nil
+}
+
+// imoText は、§4.1 の末尾に書く、P2 の IMO への対応の表。なければ空。
+func imoText(rows []IMORow) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n**P2 の IMO への対応**\n\n| IMO | 対応 | 内容 |\n| --- | --- | --- |\n")
+	for _, r := range rows {
+		fmt.Fprintf(&b, "| %s | %s | %s |\n", cell(r.Finding), cell(r.Decision), cell(r.Detail))
+	}
+	return b.String()
 }
 
 // hostCheckText は、§4.5 の本文。コードレビューの箇条書きを先に、ホストでの手順の表を後に書く。
