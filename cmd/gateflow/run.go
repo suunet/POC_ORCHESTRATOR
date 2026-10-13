@@ -217,7 +217,7 @@ func runTickets(ctx context.Context, dir string, ids []string, resume bool, stdo
 	for _, tk := range tickets {
 		e := &engine.Engine{
 			Root: dir, Project: s.project, Personal: s.personal, Workflow: s.workflow, Ticket: tk,
-			AgentImage: image, Agent: s.agent, Workspace: ws, Egress: egress, Runner: s.docker,
+			AgentImage: image, Agent: s.agent, Workspace: ws, Egress: egress.For(tk.ID), Runner: s.docker,
 			Author: author, Builtins: builtins.FS(), Rules: s.rules, Now: time.Now, Queue: q,
 		}
 		fmt.Fprintf(stdout, "%s を進めています（%s、エージェント：%s）…\n", tk.ID, tk.Status, s.agent.Name())
@@ -522,7 +522,7 @@ func cmdDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		return exitFailed
 	}
 	sb := &engine.Sandbox{Root: dir, Project: s.project, AgentImage: agentTag, WorkVolume: ws.Volume(), Agent: s.agent,
-		Workspace: ws, Egress: egress, Runner: s.docker, Queue: q, Notify: func(event string, f map[string]any) {
+		Workspace: ws, Egress: egress.For("doctor"), Runner: s.docker, Queue: q, Notify: func(event string, f map[string]any) {
 			if event == "agent-wait" {
 				fmt.Fprintf(stdout, "いま %s の AI が動いています。終わるのを待っています\n", holderName(agentq.Holder{
 					Project: fmt.Sprint(f["holderProject"]), Ticket: fmt.Sprint(f["holderTicket"]), Step: fmt.Sprint(f["holderStep"])}))

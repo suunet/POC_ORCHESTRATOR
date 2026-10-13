@@ -67,7 +67,7 @@ func cmdARBTrial(ctx context.Context, args []string, stdout, stderr io.Writer) i
 			continue
 		}
 		e := &engine.Engine{Root: dir, Project: s.project, Personal: s.personal, Workflow: s.workflow, Ticket: tk,
-			AgentImage: image, Agent: s.agent, Workspace: ws, Egress: egress, Runner: s.docker,
+			AgentImage: image, Agent: s.agent, Workspace: ws, Egress: egress.For(tk.ID + "-trial"), Runner: s.docker,
 			Builtins: builtins.FS(), Rules: s.rules, Now: time.Now, Queue: q}
 		dest := filepath.Join(batch, run)
 		fmt.Fprintf(stdout, "%s：ARB を試しています…\n", run)

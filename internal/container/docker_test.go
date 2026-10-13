@@ -89,6 +89,13 @@ func TestHelperProcess(t *testing.T) {
 		if mode == "detached-no-network" && len(args) > 1 && args[0] == "network" && args[1] == "inspect" {
 			os.Exit(1)
 		}
+		// network-race：最初の inspect はない、create は失敗（同時に別の実行が作った）、次の inspect はある
+		if mode == "network-race" && len(args) > 1 && args[0] == "network" {
+			calls, _ := os.ReadFile(os.Getenv("GATEFLOW_TEST_LOG"))
+			if args[1] == "create" || (args[1] == "inspect" && strings.Count(string(calls), "network inspect") == 1) {
+				os.Exit(1)
+			}
+		}
 		if mode == "follow" && args[0] == "logs" {
 			fmt.Println(`{"decision":"deny","target":"example.com:443"}`)
 			fmt.Fprintln(os.Stderr, "stderr の行")

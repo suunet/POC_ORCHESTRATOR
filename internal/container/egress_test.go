@@ -85,3 +85,42 @@ func TestEgress_Follow(t *testing.T) {
 		t.Errorf("docker の呼び出し:\n%s", data)
 	}
 }
+
+// プロキシの名前と別名は持ち主（チケット）ごと。後片付けは自分の名前だけ（M2.9）。
+func TestEgress_PerOwner(t *testing.T) {
+	d, logFile := fakeDocker(t, "detached")
+	base := container.Egress{Docker: d, Project: "sample", ProxyImage: "gateflow-proxy:v1"}
+	a, b := base.For("T-003"), base.For("T-004")
+	urlA, err := a.Start(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	urlB, _ := b.Start(context.Background(), nil)
+	if urlA != "http://gateflow-proxy-t-003:3128" || urlB != "http://gateflow-proxy-t-004:3128" || a.Network() != b.Network() {
+		t.Errorf("URL = %s, %s、ネットワーク %s, %s", urlA, urlB, a.Network(), b.Network())
+	}
+	a.Stop(context.Background())
+	data, _ := os.ReadFile(logFile)
+	calls := string(data)
+	for _, w := range []string{
+		"network connect --alias gateflow-proxy-t-003 gateflow-sample-internal gateflow-sample-t-003-proxy",
+		"network connect --alias gateflow-proxy-t-004 gateflow-sample-internal gateflow-sample-t-004-proxy",
+	} {
+		if !strings.Contains(calls, w) {
+			t.Errorf("docker の呼び出しに %q がない:\n%s", w, calls)
+		}
+	}
+	// T-003 の Start と Stop は、T-004 のプロキシを消さない
+	if strings.Contains(calls, "rm --force gateflow-sample-t-004-proxy\n"+"network connect --alias gateflow-proxy-t-003") ||
+		strings.Count(calls, "rm --force gateflow-sample-t-004-proxy") != 1 {
+		t.Errorf("T-004 のプロキシを消したのは、T-004 の Start の前の1回だけのはず:\n%s", calls)
+	}
+}
+
+// 内部ネットワークの作成が同時に重なって失敗しても、すでにあれば使う。
+func TestEgress_NetworkRace(t *testing.T) {
+	d, _ := fakeDocker(t, "network-race")
+	if _, err := (container.Egress{Docker: d, Project: "sample", ProxyImage: "p"}).For("T-001").Start(context.Background(), nil); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+}
