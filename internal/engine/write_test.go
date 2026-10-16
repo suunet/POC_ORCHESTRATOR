@@ -11,6 +11,7 @@ import (
 
 	"gateflow/internal/config"
 	"gateflow/internal/engine"
+	"gateflow/internal/idcheck"
 	"gateflow/internal/queue"
 	"gateflow/internal/ticket"
 )
@@ -288,5 +289,23 @@ func TestRun_QuestionOptionsInQuestions(t *testing.T) {
 	q, _ := os.ReadFile(filepath.Join(f.root, ".docs/_stash/tickets/T-002/questions.md"))
 	if n, _ := f.e.Ticket.UnresolvedQuestions(); n != 1 || !strings.Contains(string(q), "選択肢：127.0.0.1 だけ／0.0.0.0") {
 		t.Errorf("質疑 %d 件:\n%s", n, q)
+	}
+}
+
+// P3 の直後は、受入条件のテストがまだないので「テストがない」で止めない（M3 の Q-03）。
+func TestRun_P3SkipsTestMissing(t *testing.T) {
+	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Approved}, "p3-prepare": {p3Done}})
+	rules, err := idcheck.NewRules(config.IDs{Scan: []string{".docs/design"}, Tests: []string{"backend/tests"}, Prefixes: []config.Prefix{
+		{Prefix: "UC", Pattern: "UC-[0-9]{3}", Files: []string{".docs/design/buc.md"}, Find: "table-column:UC"},
+		{Prefix: "AC", Pattern: "UC-[0-9]{3}-AC-[0-9]{2}", Files: []string{".docs/design/uc/*.md"}, Find: "table-first-column", MethodColumn: "確認の方法"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.e.Rules = rules
+	res := mustRun(t, f)
+	if f.status(t) != ticket.ReadyToApprove {
+		log, _ := os.ReadFile(filepath.Join(res.RunDir, "log.jsonl"))
+		t.Fatalf("res = %+v\n%s", res, log)
 	}
 }

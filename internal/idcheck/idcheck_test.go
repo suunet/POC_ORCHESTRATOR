@@ -289,3 +289,59 @@ func TestResult_Where(t *testing.T) {
 		t.Error("定義のない ID の場所を返した")
 	}
 }
+
+// 受入条件（ユースケースの詳細の表。グロブ）と、テストの置き場（M3）。確認の方法がテストの受入条件に、
+// テストの名前かコメントの ID がなければ必須。UAT は除く。テストの検査を外す選び方もある（P3 の直後）。
+func TestRun_TestMissing(t *testing.T) {
+	cfg := testConfig()
+	cfg.Tests = []string{"tests"}
+	cfg.Prefixes = append(cfg.Prefixes, config.Prefix{Prefix: "AC", Pattern: "UC-[0-9]{3}-AC-[0-9]{2}", Files: []string{"docs/uc/*.md"},
+		Find: "table-first-column", MethodColumn: "確認の方法"})
+	files := baseFiles()
+	files["docs/uc/UC-002.md"] = "# UC-002\n\n| ID | 期待 | 確認の方法 |\n|---|---|---|\n| UC-002-AC-01 | a | シナリオテスト |\n| UC-002-AC-02 | b | 単体テスト |\n| UC-002-AC-03 | 画面 | UAT |\n"
+	files["docs/uc/UC-003.md"] = "# UC-003\n\n| ID | 期待 | 確認の方法 |\n|---|---|---|\n| UC-003-AC-01 | c | シナリオテスト |\n"
+	files["tests/scenario/a_test.go"] = "package scenario\n\n// UC-002-AC-01\nfunc TestA(t *testing.T) {}\n\nfunc TestUC003AC01(t *testing.T) {} // UC-003-AC-01\n"
+	root := writeFiles(t, files)
+	res, err := idcheck.Run(root, mustRules(t, cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := kinds(res, idcheck.Required); strings.Join(got, ",") != "test-missing UC-002-AC-02" {
+		t.Errorf("必須の指摘 = %v（UC-002-AC-02 だけがテストなし。UAT の AC-03 は除く）", got)
+	}
+	if !res.Defined("UC-003-AC-01") {
+		t.Error("グロブのファイルの受入条件を定義として読んでいない")
+	}
+	res, err = idcheck.RunWith(root, mustRules(t, cfg), idcheck.Options{SkipTestMissing: true})
+	if err != nil || len(kinds(res, idcheck.Required)) != 0 {
+		t.Errorf("テストの検査を外したのに指摘がある: %v, %v", kinds(res, idcheck.Required), err)
+	}
+}
+
+// 確かめ方のない非機能要求は推奨（M3）。空と「—」は指摘、「（案）」は確かめ方があるとみなす。
+func TestRun_Unverified(t *testing.T) {
+	cfg := testConfig()
+	cfg.Prefixes = append(cfg.Prefixes, config.Prefix{Prefix: "NFR", Pattern: "NFR-[0-9]{2}", Files: []string{"docs/nfr.md"},
+		Find: "table-first-column", VerifyColumn: "確かめ方"})
+	files := baseFiles()
+	files["docs/nfr.md"] = "# 非機能要求\n\n| ID | 要求 | 確かめ方 |\n|---|---|---|\n| NFR-01 | a | テスト |\n| NFR-02 | b |  |\n| NFR-03 | c | — |\n| NFR-04 | d | （案）手動 |\n\nNFR-01 NFR-02 NFR-03 NFR-04\n"
+	res := run2(t, files, cfg)
+	var got []string
+	for _, f := range res.Findings {
+		if f.Kind == idcheck.KindUnverified {
+			got = append(got, f.Level.String()+" "+f.ID)
+		}
+	}
+	if strings.Join(got, ",") != "推奨 NFR-02,推奨 NFR-03" {
+		t.Errorf("確かめ方のない非機能要求 = %v", got)
+	}
+}
+
+func run2(t *testing.T, files map[string]string, cfg config.IDs) idcheck.Result {
+	t.Helper()
+	res, err := idcheck.Run(writeFiles(t, files), mustRules(t, cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}

@@ -152,6 +152,21 @@ type IDs struct {
 	// DeprecatedMarker は、定義の行のセルがこの文字列で始まるとき、その定義を廃止とみなす印。
 	DeprecatedMarker string   `json:"deprecatedMarker,omitempty"`
 	Prefixes         []Prefix `json:"prefixes"`
+	// Tests は、テストの置き場（ルートからの相対パスのディレクトリ）。受入条件の ID を持つテストを探す（M3）
+	Tests []string `json:"tests,omitempty"`
+	// TestMethods は、受入条件の「確認の方法」のうちテストとみなす値（書かなければ「シナリオテスト」「単体テスト」）
+	TestMethods []string `json:"testMethods,omitempty"`
+}
+
+// DefaultTestMethods は、受入条件の確認の方法のうち、テストとみなす値の既定。
+var DefaultTestMethods = []string{"シナリオテスト", "単体テスト"}
+
+// Methods は、テストとみなす確認の方法を返す。
+func (i IDs) Methods() []string {
+	if len(i.TestMethods) > 0 {
+		return i.TestMethods
+	}
+	return DefaultTestMethods
 }
 
 // Prefix は、1つのIDのプレフィックスの定義の見つけ方。
@@ -162,6 +177,10 @@ type Prefix struct {
 	Find       string    `json:"find"`
 	NameColumn string    `json:"nameColumn,omitempty"`
 	Children   *Children `json:"children,omitempty"`
+	// MethodColumn は、受入条件の「確認の方法」の列。これがあるプレフィックスの定義は、テストがなければ必須の指摘（M3）
+	MethodColumn string `json:"methodColumn,omitempty"`
+	// VerifyColumn は、非機能要求の「確かめ方」の列。空か「—」なら推奨の指摘（M3）
+	VerifyColumn string `json:"verifyColumn,omitempty"`
 }
 
 // FindColumn は、find が table-column:<列名> のときの列名を返す。それ以外は空。

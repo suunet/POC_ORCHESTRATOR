@@ -4,11 +4,13 @@
 package idcheck
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -38,6 +40,8 @@ const (
 	KindDeprecated   = "deprecated"    // 廃止されたIDの参照
 	KindNameMismatch = "name-mismatch" // ID（名前）の名前が正本と違う
 	KindUnreferenced = "unreferenced"  // 参照されていない定義
+	KindTestMissing  = "test-missing"  // 受入条件の ID を持つテストがない（M3）
+	KindUnverified   = "unverified"    // 確かめ方のない非機能要求（M3）
 )
 
 // Finding は1件の指摘。File はルートからの相対パス。
@@ -94,6 +98,8 @@ type definition struct {
 	line       int
 	name       string
 	deprecated bool
+	rule       *prefixRule
+	method     string // 確認の方法（MethodColumn）
 }
 
 // Rules は、検査に使える状態に検証した ID の設定。NewRules からだけ作れ、作った後は変わらない。
@@ -161,8 +167,17 @@ type checker struct {
 	findings []Finding
 }
 
+// Options は、検査の選び方。
+type Options struct {
+	// SkipTestMissing は、受入条件の ID を持つテストの検査を行わない（P3 の直後。テストは P5 で書く。M3 の Q-03）
+	SkipTestMissing bool
+}
+
 // Run は、root をルートとして rules に従って検査する。ファイルの読み込みの誤りは error で返す。
-func Run(root string, rules *Rules) (Result, error) {
+func Run(root string, rules *Rules) (Result, error) { return RunWith(root, rules, Options{}) }
+
+// RunWith は、opts に従って検査する。
+func RunWith(root string, rules *Rules, opts Options) (Result, error) {
 	c := &checker{
 		root:     root,
 		cfg:      rules.cfg,
@@ -190,6 +205,11 @@ func Run(root string, rules *Rules) (Result, error) {
 		}
 	}
 	c.reportUnreferenced()
+	if !opts.SkipTestMissing {
+		if err := c.reportTestMissing(); err != nil {
+			return Result{}, err
+		}
+	}
 
 	sort.SliceStable(c.findings, func(i, j int) bool {
 		a, b := c.findings[i], c.findings[j]
@@ -245,7 +265,11 @@ func (c *checker) add(f Finding) {
 
 func (c *checker) collectDefinitions() error {
 	for _, r := range c.rules {
-		for _, f := range r.cfg.Files {
+		files, err := c.expand(r.cfg.Files)
+		if err != nil {
+			return err
+		}
+		for _, f := range files {
 			lines, err := c.read(f)
 			if err != nil {
 				return err
@@ -300,6 +324,13 @@ func (c *checker) defineFromTable(r *prefixRule, file string, t table) {
 	if r.cfg.NameColumn != "" {
 		nameCol = t.column(r.cfg.NameColumn)
 	}
+	methodCol, verifyCol := -1, -1
+	if r.cfg.MethodColumn != "" {
+		methodCol = t.column(r.cfg.MethodColumn)
+	}
+	if r.cfg.VerifyColumn != "" {
+		verifyCol = t.column(r.cfg.VerifyColumn)
+	}
 	for _, row := range t.rows {
 		cl, ok := row.at(col)
 		if !ok {
@@ -329,7 +360,16 @@ func (c *checker) defineFromTable(r *prefixRule, file string, t table) {
 				Message: fmt.Sprintf("%s は %s:%d でも定義されている", id, prev.file, prev.line)})
 			continue
 		}
-		c.defs[id] = &definition{file: file, line: row.line, name: name, deprecated: c.isDeprecated(row)}
+		c.defs[id] = &definition{file: file, line: row.line, name: name, deprecated: c.isDeprecated(row), rule: r}
+		if m, ok := row.at(methodCol); ok && methodCol >= 0 {
+			c.defs[id].method = m.text
+		}
+		if verifyCol >= 0 {
+			if v, ok := row.at(verifyCol); !ok || isNoVerify(v.text) {
+				c.add(Finding{Level: Recommended, Kind: KindUnverified, ID: id, File: file, Line: row.line,
+					Message: fmt.Sprintf("%s に確かめ方がない", id)})
+			}
+		}
 	}
 }
 
@@ -348,7 +388,11 @@ func (c *checker) isDeprecated(row tableRow) bool {
 func (c *checker) scanFiles() ([]string, error) {
 	set := map[string]bool{}
 	for _, r := range c.rules {
-		for _, f := range r.cfg.Files {
+		files, err := c.expand(r.cfg.Files)
+		if err != nil {
+			return nil, err
+		}
+		for _, f := range files {
 			set[f] = true
 		}
 	}
@@ -531,4 +575,92 @@ func leadingToken(s string) string {
 		return s
 	}
 	return s[:end]
+}
+
+// isNoVerify は、確かめ方のセルが空か「—」か（「（案）」は確かめ方があるとみなす）。
+func isNoVerify(s string) bool {
+	s = strings.TrimSpace(s)
+	return s == "" || s == "—" || s == "-" || s == "－"
+}
+
+// expand は、ファイルの一覧のグロブ（例：.docs/design/uc/*.md）を、ルートからの相対パスに展開する（M3）。
+// グロブでないものはそのまま返す（ないファイルは読むときに誤りになる）。グロブに当たるものがなければ何も返さない。
+func (c *checker) expand(files []string) ([]string, error) {
+	var out []string
+	for _, f := range files {
+		if !strings.ContainsAny(f, "*?[") {
+			out = append(out, f)
+			continue
+		}
+		matches, err := filepath.Glob(filepath.Join(c.root, filepath.FromSlash(f)))
+		if err != nil {
+			return nil, fmt.Errorf("files のグロブ %s が正しくない: %w", f, err)
+		}
+		sort.Strings(matches)
+		for _, m := range matches {
+			rel, err := filepath.Rel(c.root, m)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, filepath.ToSlash(rel))
+		}
+	}
+	return out, nil
+}
+
+// reportTestMissing は、確認の方法がテストの受入条件のうち、テストの置き場のファイルに ID が1つも出てこないものを
+// 必須の指摘にする（テストの名前かコメントに受入条件の ID を入れる規則。M3）。テストの置き場の設定がなければ行わない。
+func (c *checker) reportTestMissing() error {
+	if len(c.cfg.Tests) == 0 {
+		return nil
+	}
+	found := map[string]bool{}
+	for _, dir := range c.cfg.Tests {
+		abs := filepath.Join(c.root, filepath.FromSlash(dir))
+		if _, err := os.Stat(abs); errors.Is(err, fs.ErrNotExist) {
+			continue // テストがまだない
+		}
+		err := filepath.WalkDir(abs, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			for _, r := range c.rules {
+				if r.cfg.MethodColumn == "" {
+					continue
+				}
+				text := string(data)
+				for _, loc := range r.re.FindAllStringIndex(text, -1) {
+					if boundaryBefore(text, loc[0]) && boundaryAfter(text, loc[1]) {
+						found[text[loc[0]:loc[1]]] = true
+					}
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("テストの置き場 %s を読めない: %w", dir, err)
+		}
+	}
+	methods := c.cfg.Methods()
+	ids := make([]string, 0, len(c.defs))
+	for id := range c.defs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		def := c.defs[id]
+		if def.rule == nil || def.rule.cfg.MethodColumn == "" || def.deprecated || found[id] {
+			continue
+		}
+		if def.method != "" && !slices.Contains(methods, strings.TrimSpace(def.method)) {
+			continue // UAT・手動など、テストで確かめない受入条件（M3 の Q-02）
+		}
+		c.add(Finding{Level: Required, Kind: KindTestMissing, ID: id, File: def.file, Line: def.line,
+			Message: fmt.Sprintf("%s を確かめるテストがない（テストの名前かコメントに %s を入れる）", id, id)})
+	}
+	return nil
 }

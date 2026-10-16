@@ -29,7 +29,7 @@ func (e *Engine) doActions(ctx context.Context, st *State, step string, actions 
 		case "check-acceptance":
 			fail, err = e.checkAcceptance(ctx)
 		case "check-ids":
-			fail, err = e.checkIDs(ctx)
+			fail, err = e.checkIDs(ctx, step)
 		case "check-main-ids":
 			err = e.checkMainIDs(ctx)
 		case "import":
@@ -166,12 +166,13 @@ func (e *Engine) checkMainIDs(ctx context.Context) error {
 	return nil
 }
 
-func (e *Engine) checkIDs(ctx context.Context) (string, error) {
+func (e *Engine) checkIDs(ctx context.Context, step string) (string, error) {
 	dir, hash, err := e.exportForCheck(ctx)
 	if err != nil {
 		return "", err
 	}
-	res, err := idcheck.Run(dir, e.Rules)
+	// P3 の直後は、受入条件を発番したばかりでテストがまだない（P5 で書く）ので、テストの検査を外す（M3 の Q-03）
+	res, err := idcheck.RunWith(dir, e.Rules, idcheck.Options{SkipTestMissing: step == "p3-prepare"})
 	if err != nil {
 		return "", err
 	}
