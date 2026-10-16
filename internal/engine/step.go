@@ -502,6 +502,9 @@ func (e *Engine) inputs(ctx context.Context, st *State, step, dir string) ([]con
 			return nil, nil, err
 		}
 		e.p3IMO = imo
+		if k := touchMapKnowledge(e.Project.TouchMap); k != "" {
+			knowledge = append(knowledge, k)
+		}
 		if len(imo) > 0 {
 			data, _ := json.MarshalIndent(map[string][]output.Finding{"imo": imo}, "", "  ")
 			imoPath := filepath.Join(dir, "p2-imo.json")

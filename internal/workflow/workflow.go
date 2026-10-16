@@ -88,7 +88,7 @@ var KnownGuards = []string{"questions-resolved", "approval-checked", "branch-mer
 var KnownActions = []string{
 	"findings-to-questions", "questions-from-output", "write-sections",
 	"check-sections", "check-acceptance", "check-ids", "check-main-ids", "recommended-report", "commit", "import",
-	"commit-tests", "check-tests-unchanged",
+	"commit-tests", "check-tests-unchanged", "check-touch-docs",
 	"arb-answers", "arb-sections", "arb-escalate", "arb-report",
 }
 

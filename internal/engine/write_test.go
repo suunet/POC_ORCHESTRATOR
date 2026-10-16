@@ -332,3 +332,22 @@ func TestRun_RecommendedVerify(t *testing.T) {
 		t.Errorf("必須の lint の不合格で P5 へ戻っていない（P5 の呼び出し %d）", g.runner.calls["p5-implement"])
 	}
 }
+
+// touchMap：変えたコードに対応する文書が §4.4 にも差分にもなければ、推奨の指摘 touch-doc にする（止めない。M3）。
+func TestRun_TouchDoc(t *testing.T) {
+	approved := strings.ReplaceAll(strings.Replace(flowTicket, "ステータス: ready-to-prepare", "ステータス: ready-to-implement", 1), "- [ ]", "- [x]")
+	f := newFlow(t, approved, map[string][]string{"p5-implement": {p5Done}, "p5-verify": {vApproved}})
+	f.e.Project.TouchMap = []config.TouchRule{
+		{Code: "backend/**", Docs: []string{".docs/design/erd/columns/"}, Note: "テーブル定義書"},
+		{Code: "backend/**", Docs: []string{".docs/design/uc/"}}, // 差分にある
+		{Code: "frontend/**", Docs: []string{".docs/design/screens/"}},
+	}
+	res := mustRun(t, f)
+	if f.status(t) != ticket.ReadyForReview || !strings.Contains(res.Next, "推奨の指摘 1 件") {
+		t.Fatalf("res = %+v", res)
+	}
+	b, _ := os.ReadFile(filepath.Join(res.RunDir, "recommended.md"))
+	if !strings.Contains(string(b), "touch-doc：backend/log.go") || !strings.Contains(string(b), "erd/columns") || strings.Contains(string(b), "screens") {
+		t.Errorf("recommended.md:\n%s", b)
+	}
+}

@@ -44,7 +44,7 @@
       "failed": {"loop": "p5-implement", "counter": "verify"}
     }},
     "p5-verify": {"agent": "bj", "on": {
-      "approved": {"actions": ["check-ids", "check-main-ids", "import", "recommended-report"], "to": "ready-for-review"},
+      "approved": {"actions": ["check-ids", "check-main-ids", "check-touch-docs", "import", "recommended-report"], "to": "ready-for-review"},
       "needs_fix": {"loop": "p5-implement", "counter": "review"},
       "needs_human": {"stop": "human"}
     }}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -45,6 +46,16 @@ type Project struct {
 	Contracts []string `json:"contracts,omitempty"`
 	// Levels は、検査のレベルの上書き（検査の名前 → required・recommended。M3）。書かなければ設計の既定
 	Levels map[string]string `json:"levels,omitempty"`
+	// TouchMap は、コードのファイルと、それを触ったら確認すべき文書の対応（M3）
+	TouchMap []TouchRule `json:"touchMap,omitempty"`
+}
+
+// TouchRule は、touchMap の1行。Code はルートからの相対パスのグロブ（** は0個以上のディレクトリ）、
+// Docs は文書のファイルかディレクトリ（末尾が / ならディレクトリ）。
+type TouchRule struct {
+	Code string   `json:"code"`
+	Docs []string `json:"docs"`
+	Note string   `json:"note,omitempty"`
 }
 
 // レベルの値と、レベルを変えられる検査の名前（ID 整合チェックの種類と、検証のコマンド。M3 の Q-07）。
@@ -258,6 +269,14 @@ func LoadProject(root string) (*Project, error) {
 
 func (p *Project) validate() []error {
 	var errs []error
+	for i, r := range p.TouchMap {
+		if r.Code == "" || len(r.Docs) == 0 {
+			errs = append(errs, fmt.Errorf("touchMap の %d 行目：code と docs が要る", i+1))
+		}
+		if _, err := path.Match(strings.ReplaceAll(r.Code, "**", "*"), ""); err != nil {
+			errs = append(errs, fmt.Errorf("touchMap の %d 行目：code のグロブ %q が正しくない: %v", i+1, r.Code, err))
+		}
+	}
 	for name, l := range p.Levels {
 		if !slices.Contains(LevelChecks, name) {
 			errs = append(errs, fmt.Errorf("levels：検査 %q は、レベルを変えられる検査でない（%s）", name, strings.Join(LevelChecks, "・")))

@@ -434,5 +434,18 @@ func (t *Ticket) SheetCount() int {
 	return len(t.tableRows(headSheets, "| ファイル | 更新の内容 |"))
 }
 
+// SheetFiles は、§4.4 の更新する文書のファイル（1列目。囲みの ` は外す）を返す（touchMap の検査。M3）。
+func (t *Ticket) SheetFiles() []string {
+	var files []string
+	for _, r := range t.tableRows(headSheets, "| ファイル | 更新の内容 |") {
+		if len(r) > 0 {
+			if f := strings.Trim(strings.TrimSpace(r[0]), "`"); f != "" {
+				files = append(files, f)
+			}
+		}
+	}
+	return files
+}
+
 // IMOResponses は、§4.1 の末尾の P2 の IMO への対応の表の行（IMO・対応・内容）を返す。
 func (t *Ticket) IMOResponses() [][]string { return t.tableRows(headPlan, "| IMO | 対応 |") }

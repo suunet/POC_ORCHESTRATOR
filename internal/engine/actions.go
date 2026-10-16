@@ -39,6 +39,8 @@ func (e *Engine) doActions(ctx context.Context, st *State, step string, actions 
 			err = e.checkMainIDs(ctx)
 		case "recommended-report":
 			err = e.recommendedReport()
+		case "check-touch-docs":
+			err = e.checkTouchDocs(ctx)
 		case "import":
 			if err = e.Workspace.Import(ctx, e.Ticket.ID, e.Ticket.Branch); err == nil {
 				e.log("import", map[string]any{"branch": e.Ticket.Branch})
