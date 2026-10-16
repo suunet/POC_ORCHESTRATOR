@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"gateflow/internal/agent"
+	"gateflow/internal/config"
 	"gateflow/internal/container"
 	"gateflow/internal/gate"
 	"gateflow/internal/idcheck"
@@ -572,12 +573,18 @@ func (e *Engine) verify(ctx context.Context, st *State, dir string) (string, err
 		fmt.Fprintf(&all, "## %s（終了コード %d）：`%s`\n\n%s\n", r.Name, r.ExitCode, r.Cmd, r.Output)
 		e.log("verify", map[string]any{"name": r.Name, "exitCode": r.ExitCode, "seconds": r.Duration.Seconds()})
 		if r.ExitCode != 0 {
+			// 推奨のレベルの検証は止めずに記録し、人のレビューで提示する（M3）
+			if e.Project.Level(r.Name, config.LevelRequired) == config.LevelRecommended {
+				e.recommended = append(e.recommended, fmt.Sprintf("検証の %s が不合格（終了コード %d。推奨のレベル）", r.Name, r.ExitCode))
+				continue
+			}
 			failed[r.Name] = r.Output
 		}
 	}
 	if err != nil {
 		return "", err
 	}
+	passed = passed || len(failed) == 0
 	logPath := filepath.Join(dir, "verify.log")
 	if err := e.writeState(logPath, []byte(all.String())); err != nil {
 		return "", err

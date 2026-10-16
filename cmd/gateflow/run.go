@@ -99,7 +99,7 @@ func loadProject(dir string) (*config.Project, *workflow.Workflow, *idcheck.Rule
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	return project, wf, rules, nil
+	return project, wf, rules.WithLevels(project.Levels), nil
 }
 
 func loadSession(dir string) (*session, error) {
@@ -622,6 +622,7 @@ func mainIDsClean(dir string, project *config.Project) error {
 	if err != nil {
 		return err
 	}
+	rules = rules.WithLevels(project.Levels)
 	tmp, err := os.MkdirTemp("", "gateflow-main-")
 	if err != nil {
 		return err

@@ -78,7 +78,7 @@ var KnownGuards = []string{"questions-resolved", "approval-checked", "branch-mer
 // KnownActions は、outcome の行き先で行う操作の名前（中身は gateflow のコード）。
 var KnownActions = []string{
 	"findings-to-questions", "questions-from-output", "write-sections",
-	"check-sections", "check-acceptance", "check-ids", "check-main-ids", "commit", "import",
+	"check-sections", "check-acceptance", "check-ids", "check-main-ids", "recommended-report", "commit", "import",
 	"arb-answers", "arb-sections", "arb-escalate", "arb-report",
 }
 

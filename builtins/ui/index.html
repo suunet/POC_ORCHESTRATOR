@@ -238,7 +238,7 @@ function ago(iso) {
 }
 
 // リンクの文言
-const linkText = { ticket: "指示書を開く", questions: "質問をすべて開く", "verify-log": "検証の記録を開く", diff: "差分を開く", "catalog-diff": "カタログの差分を開く", review: "レビュー報告" };
+const linkText = { recommended: "推奨の指摘を開く", ticket: "指示書を開く", questions: "質問をすべて開く", "verify-log": "検証の記録を開く", diff: "差分を開く", "catalog-diff": "カタログの差分を開く", review: "レビュー報告" };
 function linkEl(l, text, line) {
   return el("a", { onclick: () => openSource(l.path, line) }, text || linkText[l.kind] || l.path);
 }
@@ -308,6 +308,7 @@ function renderCard(c) {
   const card = el("article", { class: "card" }, cardHead(stateName(c.status), "", c));
   if (c.reason === "unknown-state") card.append(el("p", {}, "遷移表にない状態（" + c.detail + "）"));
   else if (c.detail) card.append(el("p", {}, c.detail));
+  if (c.recommended) card.append(el("div", { class: "note" }, "推奨の指摘 " + c.recommended + " 件（止めない。レビューで確かめる）"));
   card.append(nextRow(c.next, c.links));
   return card;
 }

@@ -309,3 +309,26 @@ func TestRun_P3SkipsTestMissing(t *testing.T) {
 		t.Fatalf("res = %+v\n%s", res, log)
 	}
 }
+
+// levels で推奨にした検証のコマンドは、不合格でも止めずに推奨の指摘として残し、レビューで提示する（M3）。
+func TestRun_RecommendedVerify(t *testing.T) {
+	approved := strings.ReplaceAll(strings.Replace(flowTicket, "ステータス: ready-to-prepare", "ステータス: ready-to-implement", 1), "- [ ]", "- [x]")
+	f := newFlow(t, approved, map[string][]string{"p5": {p5Done}, "p5-verify": {vApproved}})
+	f.e.Project.Levels = map[string]string{"lint": "recommended"}
+	f.runner.codes = []int{0, 0, 1} // build・test は合格、lint は不合格
+	res := mustRun(t, f)
+	if f.status(t) != ticket.ReadyForReview || !strings.Contains(res.Next, "推奨の指摘 1 件") {
+		t.Fatalf("res = %+v", res)
+	}
+	b, _ := os.ReadFile(filepath.Join(res.RunDir, "recommended.md"))
+	if !strings.Contains(string(b), "検証の lint が不合格") {
+		t.Errorf("recommended.md:\n%s", b)
+	}
+	// 必須のまま（既定）なら、同じ不合格で P5 へ戻る
+	g := newFlow(t, approved, map[string][]string{"p5": {p5Done}, "p5-verify": {vApproved}})
+	g.runner.codes = []int{0, 0, 1, 0, 0, 0}
+	mustRun(t, g)
+	if g.runner.calls["p5"] != 2 {
+		t.Errorf("必須の lint の不合格で P5 へ戻っていない（P5 の呼び出し %d）", g.runner.calls["p5"])
+	}
+}

@@ -32,6 +32,8 @@ func (e *Engine) doActions(ctx context.Context, st *State, step string, actions 
 			fail, err = e.checkIDs(ctx, step)
 		case "check-main-ids":
 			err = e.checkMainIDs(ctx)
+		case "recommended-report":
+			err = e.recommendedReport()
 		case "import":
 			if err = e.Workspace.Import(ctx, e.Ticket.ID, e.Ticket.Branch); err == nil {
 				e.log("import", map[string]any{"branch": e.Ticket.Branch})
@@ -128,6 +130,25 @@ func (e *Engine) exportForCheck(ctx context.Context) (string, string, error) {
 	return dir, hash, err
 }
 
+// recommendedReport は、この実行で見つけた推奨の指摘を、実行の記録の recommended.md にまとめる（人のレビューで提示する。M3）。
+func (e *Engine) recommendedReport() error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s 推奨の指摘\n\n止めない指摘（project.json の levels で推奨のもの）。人のコードレビューで確かめる。\n\n", e.Ticket.ID)
+	if len(e.recommended) == 0 {
+		b.WriteString("なし\n")
+	}
+	for _, r := range e.recommended {
+		fmt.Fprintf(&b, "- %s\n", r)
+	}
+	path := filepath.Join(e.run.Dir, "recommended.md")
+	if err := e.writeState(path, []byte(b.String())); err != nil {
+		return err
+	}
+	e.recommendedPath = path
+	e.log("recommended", map[string]any{"count": len(e.recommended), "path": e.relPath(path)})
+	return nil
+}
+
 // stopIDDuplicate は、main と合わせると ID 整合チェックの必須の指摘が出るときの止まる理由（M2.9）。
 const stopIDDuplicate = "id-duplicate"
 
@@ -180,6 +201,8 @@ func (e *Engine) checkIDs(ctx context.Context, step string) (string, error) {
 	for _, f := range res.Findings {
 		if f.Level == idcheck.Required {
 			msgs = append(msgs, fmt.Sprintf("- %s:%d %s", f.File, f.Line, f.Message))
+		} else if step != "p3-prepare" {
+			e.recommended = append(e.recommended, fmt.Sprintf("ID 整合チェック（%s）：%s:%d %s", f.Kind, f.File, f.Line, f.Message))
 		}
 	}
 	e.log("check-ids", map[string]any{"commit": hash, "dir": dir, "required": len(msgs), "findings": len(res.Findings)})

@@ -106,6 +106,14 @@ type definition struct {
 type Rules struct {
 	cfg      config.IDs
 	prefixes []*prefixRule
+	levels   map[string]string // 種類 → レベルの上書き（M3）
+}
+
+// WithLevels は、指摘の種類ごとのレベルを上書きした Rules を返す（project.json の levels。M3）。
+func (r *Rules) WithLevels(levels map[string]string) *Rules {
+	c := *r
+	c.levels = levels
+	return &c
 }
 
 type prefixRule struct {
@@ -208,6 +216,14 @@ func RunWith(root string, rules *Rules, opts Options) (Result, error) {
 	if !opts.SkipTestMissing {
 		if err := c.reportTestMissing(); err != nil {
 			return Result{}, err
+		}
+	}
+	for i, f := range c.findings {
+		switch rules.levels[f.Kind] {
+		case config.LevelRequired:
+			c.findings[i].Level = Required
+		case config.LevelRecommended:
+			c.findings[i].Level = Recommended
 		}
 	}
 

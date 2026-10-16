@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -42,6 +43,26 @@ type Project struct {
 	// Contracts は、外から見える契約の ID（例：NFR-06、SCR-*。末尾の * は前方一致）。
 	// ARB の裁定がこれに触れたら、gateflow が人へ回させる（M2.6 の Q-05）。
 	Contracts []string `json:"contracts,omitempty"`
+	// Levels は、検査のレベルの上書き（検査の名前 → required・recommended。M3）。書かなければ設計の既定
+	Levels map[string]string `json:"levels,omitempty"`
+}
+
+// レベルの値と、レベルを変えられる検査の名前（ID 整合チェックの種類と、検証のコマンド。M3 の Q-07）。
+const (
+	LevelRequired    = "required"
+	LevelRecommended = "recommended"
+)
+
+// LevelChecks は、levels で変えられる検査の名前。
+var LevelChecks = []string{"undefined", "duplicate", "deprecated", "name-mismatch", "unreferenced", "test-missing", "unverified",
+	"build", "test", "lint"}
+
+// Level は、検査 name のレベル（上書きがなければ def）を返す。
+func (p *Project) Level(name, def string) string {
+	if l, ok := p.Levels[name]; ok {
+		return l
+	}
+	return def
 }
 
 // IsContract は、id が契約の ID の一覧に当たるかを返す。
@@ -237,6 +258,14 @@ func LoadProject(root string) (*Project, error) {
 
 func (p *Project) validate() []error {
 	var errs []error
+	for name, l := range p.Levels {
+		if !slices.Contains(LevelChecks, name) {
+			errs = append(errs, fmt.Errorf("levels：検査 %q は、レベルを変えられる検査でない（%s）", name, strings.Join(LevelChecks, "・")))
+		}
+		if l != LevelRequired && l != LevelRecommended {
+			errs = append(errs, fmt.Errorf("levels：%s のレベル %q は required・recommended のどちらでもない", name, l))
+		}
+	}
 	switch {
 	case p.FormatVersion == nil:
 		errs = append(errs, errors.New("formatVersion がない"))

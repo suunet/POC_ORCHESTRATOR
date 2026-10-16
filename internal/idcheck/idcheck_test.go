@@ -345,3 +345,19 @@ func run2(t *testing.T, files map[string]string, cfg config.IDs) idcheck.Result 
 	}
 	return res
 }
+
+// levels で、指摘の種類ごとにレベルを変えられる（M3）。
+func TestRun_Levels(t *testing.T) {
+	files := baseFiles()
+	files["docs/note.md"] = "ACT-99 は未定義\n"
+	rules := mustRules(t, testConfig()).WithLevels(map[string]string{"undefined": "recommended", "unreferenced": "required"})
+	res, err := idcheck.Run(writeFiles(t, files), rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range res.Findings {
+		if (f.Kind == idcheck.KindUndefined && f.Level != idcheck.Recommended) || (f.Kind == idcheck.KindUnreferenced && f.Level != idcheck.Required) {
+			t.Errorf("%s の %s のレベル = %s", f.ID, f.Kind, f.Level)
+		}
+	}
+}

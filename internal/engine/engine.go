@@ -117,6 +117,9 @@ type Engine struct {
 	arbForced  []int    // 進展なしで人へ回す指摘の番号（M2.6）
 	arbQIDs    []string // ARB の裁定を書いた質疑の番号（コミットのメッセージに使う）
 	checks     int
+	// recommended は、この実行で見つけた推奨の指摘（止めずに、人のレビューで提示する。M3）
+	recommended     []string
+	recommendedPath string
 }
 
 // errStop は、step の実行が人の確認待ちで止まることを表す。
@@ -314,6 +317,9 @@ func (e *Engine) next(status string) string {
 		return fmt.Sprintf("作業ブランチ %s の差分、指示書の§3・§4、カタログの差分（実行の記録の arb-report.md）を確かめ、§4.6 をチェックしてから gateflow approve %s", e.Ticket.Branch, id)
 	case string(ticket.ReadyForReview):
 		s := fmt.Sprintf("作業ブランチ %s をコードレビューする", e.Ticket.Branch)
+		if e.recommendedPath != "" {
+			s += fmt.Sprintf("（推奨の指摘 %d 件：%s）", len(e.recommended), e.recommendedPath)
+		}
 		if i := e.Project.Issue; i != nil && i.PRRef != "" && e.Ticket.IssueID() != "" {
 			s += fmt.Sprintf("（PR の本文：%s）", i.Format(i.PRRef, e.Ticket.IssueID()))
 		}

@@ -118,6 +118,8 @@ func TestLoadProject_Invalid(t *testing.T) {
 		want []string
 	}{
 		{"書式のバージョンがない", projectWith(t, "formatVersion", ""), []string{"formatVersion"}},
+		{"levels の知らない検査", projectWith(t, "levels", `{"diff-size": "recommended"}`), []string{"levels", "diff-size"}},
+		{"levels の知らないレベル", projectWith(t, "levels", `{"lint": "optional"}`), []string{"levels", "optional"}},
 		{"書式のバージョン1は拒否する", projectWith(t, "formatVersion", "1"), []string{"formatVersion", "1"}},
 		{"必須の項目がない", `{"formatVersion": 2}`, []string{"name", "branch", "agent", "verify", "ids", "policies"}},
 		{"知らない項目", projectWith(t, "issue", `"x"`), []string{"issue"}},

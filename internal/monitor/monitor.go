@@ -94,9 +94,11 @@ type Card struct {
 	Denied    []Denied       `json:"denied,omitempty"`
 	Approve   *ApproveInfo   `json:"approve,omitempty"`
 	Questions *QuestionsInfo `json:"questions,omitempty"`
-	Next      string         `json:"next"`
-	Links     []Link         `json:"links,omitempty"`
-	Warnings  []string       `json:"warnings,omitempty"`
+	// Recommended は、レビュー待ちのとき、推奨の指摘の件数（実行の記録の recommended.md。M3）
+	Recommended int      `json:"recommended,omitempty"`
+	Next        string   `json:"next"`
+	Links       []Link   `json:"links,omitempty"`
+	Warnings    []string `json:"warnings,omitempty"`
 }
 
 // Failure は、検証の失敗の要約（失敗したテストの名前と、出力の最初の数行）。
@@ -401,6 +403,12 @@ func (m *Monitor) add(st *Status, tr *tracked) {
 	case res.Outcome == engine.Gate:
 		card.Kind = CardOther
 		card.Links = []Link{ticketLink}
+		if p := m.findRunFile(tr, "recommended.md"); p != "" {
+			if b, err := fs.ReadFile(tr.fsys, p); err == nil {
+				card.Recommended = strings.Count(string(b), "\n- ")
+				card.Links = append(card.Links, Link{Kind: "recommended", Path: path.Join(ticket.Dir, p)})
+			}
+		}
 		lane.Note = "review"
 	case res.Outcome == engine.Runnable:
 		lane.Group, lane.Note, lane.Role = GroupWait, "wait-run", m.Workflow.StepRole(m.autoStep(t))
