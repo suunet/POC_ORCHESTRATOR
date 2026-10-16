@@ -28,6 +28,8 @@ type State struct {
 	DevResult string            `json:"devResult,omitempty"` // 最後の P5 の result.json（P5後に渡す）
 	VerifyLog string            `json:"verifyLog,omitempty"` // 最後の検証の出力（P5後に渡す）
 	Commit    string            `json:"commit,omitempty"`    // 最後のコミット
+	// TestCommits は、p5-test の変更のコミット。p5-implement がそのテストのファイルを変えていないかを確かめる（M3）
+	TestCommits []string `json:"testCommits,omitempty"`
 	// Commits は、この実行で gateflow がコミットした順。resume のとき、clone の取り込まれていないコミットが
 	// gateflow 自身のものかを確かめるのに使う（M2.7）
 	Commits []string `json:"commits,omitempty"`

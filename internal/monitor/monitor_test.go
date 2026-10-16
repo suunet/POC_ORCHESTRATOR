@@ -86,9 +86,9 @@ func fixture(t *testing.T) string {
 	write("T-011/ticket.md", ticketMD("T-011", "implementing", ""))
 	r := "T-011/runs/20261014-083000/"
 	write(r+"running.json", `{"pid":4242,"start":"S","since":"2026-10-14T08:30:00Z"}`)
-	write(r+"state.json", `{"ticket":"T-011","workflow":"aidd-impl","step":"p5","steps":1,"status":"implementing"}`)
-	write(r+"log.jsonl", logLines(map[string]any{"time": "2026-10-14T08:50:00Z", "event": "step-start", "step": "p5", "n": 1},
-		map[string]any{"time": "2026-10-14T08:51:00Z", "event": "output-invalid", "step": "p5"}))
+	write(r+"state.json", `{"ticket":"T-011","workflow":"aidd-impl","step":"p5-implement","steps":1,"status":"implementing"}`)
+	write(r+"log.jsonl", logLines(map[string]any{"time": "2026-10-14T08:50:00Z", "event": "step-start", "step": "p5-implement", "n": 1},
+		map[string]any{"time": "2026-10-14T08:51:00Z", "event": "output-invalid", "step": "p5-implement"}))
 	write(r+"proxy.log", `{"decision":"deny","target":"evil.example:443"}`+"\n")
 
 	// T-019：実行中だが、AI の呼び出しの順番を待っている（M2.9）
@@ -103,14 +103,14 @@ func fixture(t *testing.T) string {
 	// T-012：検証で進展なし（止まった。再開は実装から）
 	write("T-012/ticket.md", ticketMD("T-012", "implementing", ""))
 	r = "T-012/runs/20261014-080000/"
-	write(r+"state.json", `{"ticket":"T-012","workflow":"aidd-impl","step":"verify","steps":4,"status":"implementing","stopped":{"reason":"no-progress","detail":"同じ失敗"},"resume":"p5"}`)
+	write(r+"state.json", `{"ticket":"T-012","workflow":"aidd-impl","step":"verify","steps":4,"status":"implementing","stopped":{"reason":"no-progress","detail":"同じ失敗"},"resume":"p5-implement"}`)
 	write(r+"log.jsonl", logLines(
-		map[string]any{"time": "2026-10-14T08:00:00Z", "event": "step-start", "step": "p5", "n": 1},
-		map[string]any{"time": "2026-10-14T08:01:00Z", "event": "step-end", "step": "p5", "outcome": "done", "seconds": 60},
+		map[string]any{"time": "2026-10-14T08:00:00Z", "event": "step-start", "step": "p5-implement", "n": 1},
+		map[string]any{"time": "2026-10-14T08:01:00Z", "event": "step-end", "step": "p5-implement", "outcome": "done", "seconds": 60},
 		map[string]any{"time": "2026-10-14T08:01:00Z", "event": "step-start", "step": "verify", "n": 2},
 		map[string]any{"time": "2026-10-14T08:02:00Z", "event": "step-end", "step": "verify", "outcome": "failed", "seconds": 60},
-		map[string]any{"time": "2026-10-14T08:02:00Z", "event": "step-start", "step": "p5", "n": 3},
-		map[string]any{"time": "2026-10-14T08:03:00Z", "event": "step-end", "step": "p5", "outcome": "done", "seconds": 60},
+		map[string]any{"time": "2026-10-14T08:02:00Z", "event": "step-start", "step": "p5-implement", "n": 3},
+		map[string]any{"time": "2026-10-14T08:03:00Z", "event": "step-end", "step": "p5-implement", "outcome": "done", "seconds": 60},
 		map[string]any{"time": "2026-10-14T08:03:00Z", "event": "step-start", "step": "verify", "n": 4},
 		map[string]any{"time": "2026-10-14T08:04:00Z", "event": "step-end", "step": "verify", "outcome": "failed", "seconds": 60},
 		map[string]any{"time": "2026-10-14T08:04:00Z", "event": "stopped", "reason": "no-progress"}))

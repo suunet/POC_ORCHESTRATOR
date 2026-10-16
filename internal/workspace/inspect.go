@@ -170,6 +170,31 @@ func (w *Workspace) TreeHash(ctx context.Context, ticketID string) (string, erro
 	return strings.TrimSpace(out.String()), nil
 }
 
+const testsChangedScript = `set -eu
+cd /work
+g() { git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.quotepath=false "$@"; }
+g diff-tree --no-commit-id --name-only -r --diff-filter=AM "$COMMIT" | while IFS= read -r f; do
+  if ! g diff --quiet "$COMMIT" -- "$f"; then printf '%s\n' "$f"; fi
+done
+`
+
+// TestsChanged は、commit で足したか変えたファイルのうち、clone の作業ツリー（コミットしていない変更を含む）で
+// commit の時点から変わった（消された）ものを返す。p5-test のテストを p5-implement が書き換えていないかの検査に使う（M3）。
+func (w *Workspace) TestsChanged(ctx context.Context, ticketID, commit string) ([]string, error) {
+	var out bytes.Buffer
+	mounts := []container.Mount{{Type: container.Volume, Source: w.Volume(), Subpath: ticketID + "/repo", Target: "/work"}}
+	if err := w.run(ctx, w.spec(ticketID, "tests", mounts, map[string]string{"COMMIT": commit}, testsChangedScript), &out); err != nil {
+		return nil, fmt.Errorf("テストのファイルの変更を確かめられない: %w", err)
+	}
+	var files []string
+	for _, l := range strings.Split(out.String(), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			files = append(files, l)
+		}
+	}
+	return files, nil
+}
+
 // ArchiveTree は、プロジェクトのリポジトリの木（ブランチや木の ID）を dest に取り出す（git archive。ホストの作業ツリーと
 // ref は変えない）。main の ID 整合チェックに使う（M2.9）。
 func ArchiveTree(ctx context.Context, project, treeish, dest string) error {

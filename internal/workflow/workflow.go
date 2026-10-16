@@ -46,6 +46,10 @@ type Step struct {
 	Agent string           `json:"agent,omitempty"`
 	Check string           `json:"check,omitempty"`
 	On    map[string]Route `json:"on"`
+	// SkipIf と SkipTo：条件が成り立てば、この step を飛ばして SkipTo の step から続ける（M3）。
+	// 条件は no-test-cases（指示書の §4.3 のテストケースが0件）だけ
+	SkipIf string `json:"skipIf,omitempty"`
+	SkipTo string `json:"skipTo,omitempty"`
 }
 
 // Route は、outcome の行き先。Actions を順に行ってから、To・Next・Loop・Stop のどれか1つへ進む。
@@ -63,14 +67,19 @@ var stepOutcomes = map[string][]string{
 	"p2-review":    {"approved", "needs_fix"},
 	"p2-arbitrate": {"resolved", "escalated"},
 	"p3-prepare":   {"done", "needs_answer"},
-	"p5":           {"done", "test_defect", "blocked"},
+	"p5-test":      {"done", "test_defect", "blocked"},
+	"p5-implement": {"done", "test_defect", "blocked"},
 	"p5-verify":    {"approved", "needs_fix", "needs_human"},
 }
 
 // checkOutcomes は、機械の検査の step のあり得る outcome。
 var checkOutcomes = map[string][]string{
 	"verify-commands": {"passed", "failed"},
+	"tests-fail":      {"red", "green"}, // 新しいテストが失敗する（red）か、通ってしまう（green）か（M3）
 }
+
+// SkipNoTestCases は、指示書の §4.3 のテストケースが0件という step を飛ばす条件（M3）。
+const SkipNoTestCases = "no-test-cases"
 
 // KnownGuards は、人の遷移の前に確かめる機械検証の名前（中身は gateflow のコード）。
 var KnownGuards = []string{"questions-resolved", "approval-checked", "branch-merged", "host-checked", "ids-clean"}
@@ -79,6 +88,7 @@ var KnownGuards = []string{"questions-resolved", "approval-checked", "branch-mer
 var KnownActions = []string{
 	"findings-to-questions", "questions-from-output", "write-sections",
 	"check-sections", "check-acceptance", "check-ids", "check-main-ids", "recommended-report", "commit", "import",
+	"commit-tests", "check-tests-unchanged",
 	"arb-answers", "arb-sections", "arb-escalate", "arb-report",
 }
 
@@ -210,6 +220,14 @@ func (w *Workflow) validate() []error {
 		for _, o := range outcomes {
 			if _, ok := st.On[o]; !ok {
 				add("%s：outcome %q の行き先がない", where, o)
+			}
+		}
+		if st.SkipIf != "" || st.SkipTo != "" {
+			if st.SkipIf != SkipNoTestCases {
+				add("%s：skipIf %q は知らない（%s だけ）", where, st.SkipIf, SkipNoTestCases)
+			}
+			if _, ok := w.Steps[st.SkipTo]; !ok || st.SkipTo == n {
+				add("%s：skipTo の step %q がない", where, st.SkipTo)
 			}
 		}
 		for o, r := range st.On {

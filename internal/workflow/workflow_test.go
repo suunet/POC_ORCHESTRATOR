@@ -24,18 +24,26 @@ func TestLoadBuiltin_AiddImpl(t *testing.T) {
 		t.Errorf("ready = %+v, %v", h, ok)
 	}
 	a, ok := wf.AutoFrom("ready-to-implement")
-	if !ok || a.To != "implementing" || a.Start != "p5" {
+	if !ok || a.To != "implementing" || a.Start != "p5-test" {
 		t.Errorf("auto ready-to-implement = %+v, %v", a, ok)
 	}
 	if _, ok := wf.AutoFrom("draft"); ok {
 		t.Error("draft は人の関門なのに自動で進む")
 	}
-	p5, ok := wf.Steps["p5"]
-	if !ok || p5.Agent != "dev" {
-		t.Fatalf("p5 = %+v", p5)
+	for _, name := range []string{"p5-test", "p5-implement"} {
+		p5, ok := wf.Steps[name]
+		if !ok || p5.Agent != "dev" {
+			t.Fatalf("%s = %+v", name, p5)
+		}
+		if r := p5.On["blocked"]; r.Stop != "human" {
+			t.Errorf("%s の blocked = %+v, want 人の確認待ち", name, r)
+		}
 	}
-	if r := p5.On["blocked"]; r.Stop != "human" {
-		t.Errorf("p5 の blocked = %+v, want 人の確認待ち", r)
+	if s := wf.Steps["p5-test"]; s.SkipIf != workflow.SkipNoTestCases || s.SkipTo != "p5-implement" {
+		t.Errorf("p5-test の飛ばし = %+v", s)
+	}
+	if r := wf.Steps["red"].On["green"]; r.Loop != "p5-test" {
+		t.Errorf("red の green = %+v", r)
 	}
 }
 
@@ -111,6 +119,10 @@ func TestParse_Invalid(t *testing.T) {
 		{"関門のコマンドが重複", mutate(t, func(m map[string]any) {
 			m["human"] = append(m["human"].([]any), map[string]any{"command": "ready", "from": []any{"draft"}, "to": "ready-to-prepare"})
 		}), []string{"ready"}},
+		{"知らない飛ばしの条件", mutate(t, func(m map[string]any) {
+			steps(m)["p2-review"].(map[string]any)["skipIf"] = "always"
+			steps(m)["p2-review"].(map[string]any)["skipTo"] = "p2-review"
+		}), []string{"always", "skipTo"}},
 		{"知らない項目", []byte(strings.Replace(valid, `"name": "mini",`, `"name": "mini", "extra": 1,`, 1)), []string{"extra"}},
 	}
 	for _, tc := range cases {
@@ -165,7 +177,7 @@ func TestParse_DisplayErrors(t *testing.T) {
 	cases := map[string]struct{ from, to, want string }{
 		"結果の表示名がない":    {`"needs_fix": "差し戻し", `, ``, `結果 "needs_fix"`},
 		"止まる理由の表示名がない": {`"write-failed": "記録を書けない", `, ``, `止まる理由 "write-failed"`},
-		"step が段に入らない": {`, "steps": ["p5"]}`, `}`, `step "p5" がどの段にも入っていない`},
+		"step が段に入らない": {`, "steps": ["p5-test", "red", "p5-implement"]}`, `}`, `step "p5-implement" がどの段にも入っていない`},
 		"状態が2つの段に入る":   {`"states": ["done"]}`, `"states": ["done", "draft"]}`, `状態 "draft" は段`},
 		"コマンドの表示名がない":  {`"cancel": "中止"`, `"x": "x"`, `コマンド "cancel"`},
 	}

@@ -59,6 +59,8 @@ type Workspace interface {
 	Export(ctx context.Context, ticketID, dest string) (string, error)
 	Diff(ctx context.Context, ticketID, base string) (string, error)
 	TreeHash(ctx context.Context, ticketID string) (string, error)
+	// TestsChanged は、commit で変わったファイルのうち、作業ツリーで変わった（消された）ものを返す（M3）
+	TestsChanged(ctx context.Context, ticketID, commit string) ([]string, error)
 	Snapshot(ctx context.Context, ticketID, dest string) error
 	Reset(ctx context.Context, ticketID string) error
 	MergedTree(ctx context.Context, ticketID, branch, mainBranch, dest string) (conflict bool, err error)
@@ -474,6 +476,12 @@ func (e *Engine) loopIn(ctx context.Context, run *ticket.Run, st *State, step st
 			return Result{Outcome: Gate, Message: fmt.Sprintf("ARB の往復が上限（%d）に達したので、BJ の指摘を人へ回した", limits.ArbitrateLoops),
 				Next: e.next(string(ticket.Draft))}, nil
 		}
+		// §4.3 のテストケースが0件なら、テストを先に書く step を飛ばす（M3）
+		if s := e.Workflow.Steps[step]; s.SkipIf == workflow.SkipNoTestCases && e.Ticket.TestCaseCount() == 0 {
+			e.log("step-skip", map[string]any{"step": step, "to": s.SkipTo, "reason": s.SkipIf})
+			step = s.SkipTo
+			continue
+		}
 		st.Steps++
 		st.Step = step
 		if err := st.Save(run.Dir); err != nil {
@@ -516,7 +524,7 @@ func (e *Engine) loopIn(ctx context.Context, run *ticket.Run, st *State, step st
 		switch {
 		case route.Stop != "":
 			detail := fmt.Sprintf("%s の結果が %s", step, outcome)
-			if step == "p5" && e.lastBlock != "" {
+			if (step == "p5-test" || step == "p5-implement") && e.lastBlock != "" {
 				detail = e.lastBlock
 			}
 			return stopped(outcome, detail, step)

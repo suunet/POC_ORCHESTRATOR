@@ -221,7 +221,7 @@ func TestRun_MergeMainOnlyInP2Stage(t *testing.T) {
 	if len(f.ws.prepareOpts) != 1 || !f.ws.prepareOpts[0].MergeMain || f.ws.prepareOpts[0].Author.Name == "" {
 		t.Errorf("P2 の段階 = %+v", f.ws.prepareOpts)
 	}
-	g := newFlow(t, approvedTicket(t), map[string][]string{"p5": {p5Done}, "p5-verify": {vApproved}})
+	g := newFlow(t, approvedTicket(t), map[string][]string{"p5-implement": {p5Done}, "p5-verify": {vApproved}})
 	mustRun(t, g)
 	if len(g.ws.prepareOpts) != 1 || g.ws.prepareOpts[0].MergeMain {
 		t.Errorf("P5 の段階 = %+v", g.ws.prepareOpts)

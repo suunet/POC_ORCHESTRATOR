@@ -51,7 +51,7 @@ type P5Result struct {
 	Summary       string        `json:"summary" desc:"行ったことの要約"`
 	Questions     []Question    `json:"questions,omitempty" desc:"人に確かめたいこと（推測で埋めない）"`
 	Notes         []string      `json:"notes,omitempty" desc:"補足（気づいたが扱わなかったことなど）"`
-	Tests         []TestMapping `json:"tests,omitempty" desc:"書いたテストと受入条件の対応。outcome が done なら1件以上（指示書の§4.3 が0件なら空でよい）"`
+	Tests         []TestMapping `json:"tests,omitempty" desc:"このステップで足したテスト（p5-test が書いたテストのファイルは変えない。足したときだけ）"`
 	Verify        []VerifyRun   `json:"verify,omitempty" desc:"実行した検証のコマンド（「検証」に挙げたものすべて）と終了コード。outcome が done なら、すべて実行して終了コード 0"`
 	ChangedSheets []string      `json:"changedSheets,omitempty" desc:"更新した文書（指示書の§4.4に挙がったものだけ）"`
 	BlockReason   *BlockReason  `json:"blockReason,omitempty" desc:"outcome が blocked のときの理由（blocked のときだけ書く）"`
@@ -139,4 +139,32 @@ func (r *P5Result) validate(requireTests bool) []error {
 // DescribeP5 は、AIに渡す P5 の出力形式の説明を返す。
 func DescribeP5() string {
 	return describe(ResultPath, P5Result{})
+}
+
+// P5TestResult は、p5-test の出力（テストだけを書く。M3）。
+type P5TestResult struct {
+	Outcome     string        `json:"outcome" desc:"結果" enum:"done,test_defect,blocked"`
+	Summary     string        `json:"summary" desc:"行ったことの要約"`
+	Questions   []Question    `json:"questions,omitempty" desc:"人に確かめたいこと（推測で埋めない）"`
+	Notes       []string      `json:"notes,omitempty" desc:"補足"`
+	Tests       []TestMapping `json:"tests,omitempty" desc:"書いたテストと受入条件の対応。outcome が done なら1件以上"`
+	BlockReason *BlockReason  `json:"blockReason,omitempty" desc:"outcome が blocked のときの理由（blocked のときだけ書く）"`
+}
+
+// ParseP5Test は、p5-test の出力を読み込んで検査する。done ならテストが1件以上要る。
+func ParseP5Test(data []byte) (*P5TestResult, error) {
+	var r P5TestResult
+	if err := decodeStrict(data, &r); err != nil {
+		return nil, err
+	}
+	all := P5Result{Outcome: r.Outcome, Summary: r.Summary, Questions: r.Questions, Notes: r.Notes, Tests: r.Tests, BlockReason: r.BlockReason}
+	if errs := all.validate(true); len(errs) > 0 {
+		return nil, fmt.Errorf("出力の内容が正しくない:\n%w", errors.Join(errs...))
+	}
+	return &r, nil
+}
+
+// DescribeP5Test は、p5-test の出力形式の説明。
+func DescribeP5Test() string {
+	return describe(ResultPath, P5TestResult{})
 }

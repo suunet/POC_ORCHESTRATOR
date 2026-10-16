@@ -51,12 +51,23 @@ var stepDefs = map[string]stepDef{
 		e.lastP3 = r
 		return r.Outcome, nil
 	}},
-	"p5": {"prompts/instructions/p5.md", output.DescribeP5, func(e *Engine, d []byte) (string, error) {
+	"p5-test": {"prompts/instructions/p5-test.md", output.DescribeP5Test, func(e *Engine, d []byte) (string, error) {
+		r, err := output.ParseP5Test(d)
+		if err != nil {
+			return "", err
+		}
+		e.lastBlock = ""
+		if r.BlockReason != nil {
+			e.lastBlock = r.BlockReason.Kind + ": " + r.BlockReason.Detail
+		}
+		return r.Outcome, nil
+	}},
+	"p5-implement": {"prompts/instructions/p5-implement.md", output.DescribeP5, func(e *Engine, d []byte) (string, error) {
 		var names []string
 		for _, c := range gate.Commands(e.Project.Verify) {
 			names = append(names, c.Name)
 		}
-		r, err := output.ParseP5(d, e.Ticket.TestCaseCount() > 0, names)
+		r, err := output.ParseP5(d, false, names)
 		if err != nil {
 			return "", err
 		}
@@ -90,11 +101,14 @@ var stepDefs = map[string]stepDef{
 // execStep は、step を1つ実行して outcome を返す。人の確認待ちで止めるときは errStop を返す。
 func (e *Engine) execStep(ctx context.Context, st *State, step, dir string) (string, error) {
 	s := e.Workflow.Steps[step]
-	if s.Check == "verify-commands" {
+	switch s.Check {
+	case "verify-commands":
 		return e.verify(ctx, st, dir)
+	case "tests-fail":
+		return e.red(ctx, dir)
 	}
 	outcome, err := e.agentStep(ctx, st, step, s.Agent, dir)
-	if err != nil || step != "p5" || outcome != "done" {
+	if err != nil || (step != "p5-test" && step != "p5-implement") || outcome != "done" {
 		return outcome, err
 	}
 	// 差し戻しの後の P5 で作業ツリーが変わっていなければ、進展なし（Q-08）
@@ -102,10 +116,14 @@ func (e *Engine) execStep(ctx context.Context, st *State, step, dir string) (str
 	if err != nil {
 		return "", err
 	}
-	prev := st.Prints["tree"]
-	st.Prints["tree"] = tree
+	key := "tree"
+	if step == "p5-test" {
+		key = "tree-p5-test"
+	}
+	prev := st.Prints[key]
+	st.Prints[key] = tree
 	if prev != "" && prev == tree {
-		return "", stop("no-progress", "差し戻しの後の P5 で、作業ツリーが変わっていない（%s）", tree)
+		return "", stop("no-progress", "差し戻しの後の %s で、作業ツリーが変わっていない（%s）", step, tree)
 	}
 	return outcome, nil
 }
@@ -229,7 +247,7 @@ func (e *Engine) agentStep(ctx context.Context, st *State, step, role, dir strin
 			case "p2-arbitrate":
 				st.ArbDecided = e.arbDecided()
 			}
-			if step == "p5" {
+			if step == "p5-implement" {
 				st.DevResult = filepath.Join(outDir, "result.json")
 			}
 			if st.Feedback != "" && (outcome == "done" || outcome == "approved") {
@@ -524,18 +542,23 @@ func (e *Engine) prompt(step, role string, def stepDef, knowledge []string, poli
 		return agent.Request{}, err
 	}
 	var builtin []string
-	if step == "p5" {
+	if step == "p5-test" {
+		testFirst, err := prompt.LoadBuiltin(e.Builtins, "prompts/policies/test-first.md")
+		if err != nil {
+			return agent.Request{}, err
+		}
+		builtin = append(builtin, testFirst)
+		if c := e.Project.Verify.Test; c != "" {
+			instruction += fmt.Sprintf("\n### テストのコマンド\n\nテストは次のコマンドで実行する（作業場所 /work）。gateflow は、このコマンドで新しいテストが失敗することを確かめる。\n\n- test：`%s`\n", c)
+		}
+	}
+	if step == "p5-implement" {
 		var v strings.Builder
 		v.WriteString("\n### 検証\n\n実装の後に、次のコマンドを作業場所（/work）で実行し、すべて合格することを確かめる。gateflow も同じコマンドで確かめる。\n\n")
 		for _, c := range gate.Commands(e.Project.Verify) {
 			fmt.Fprintf(&v, "- %s：`%s`\n", c.Name, c.Cmd)
 		}
 		instruction += v.String()
-		testFirst, err := prompt.LoadBuiltin(e.Builtins, "prompts/policies/test-first.md")
-		if err != nil {
-			return agent.Request{}, err
-		}
-		builtin = append(builtin, testFirst)
 	}
 	model := ""
 	if e.Personal != nil {
@@ -549,14 +572,14 @@ func (e *Engine) prompt(step, role string, def stepDef, knowledge []string, poli
 	return req, nil
 }
 
-// verify は、検証コマンドを実行する。不合格なら、出力の指紋を作る。
-func (e *Engine) verify(ctx context.Context, st *State, dir string) (string, error) {
+// verifyGate は、検証のコンテナ（ネットワークなし、clone を /work に置く）で検証のコマンドを実行する Gate を返す。
+func (e *Engine) verifyGate(name string) (gate.Gate, error) {
 	root, err := filepath.Abs(e.Root)
 	if err != nil {
-		return "", err
+		return gate.Gate{}, err
 	}
-	g := gate.Gate{Runner: e.Runner, Base: container.Spec{
-		Name:    fmt.Sprintf("gateflow-%s-%s-verify", e.Project.Name, strings.ToLower(e.Ticket.ID)),
+	return gate.Gate{Runner: e.Runner, Base: container.Spec{
+		Name:    fmt.Sprintf("gateflow-%s-%s-%s", e.Project.Name, strings.ToLower(e.Ticket.ID), name),
 		Image:   e.AgentImage,
 		Network: "none",
 		User:    "agent",
@@ -564,7 +587,43 @@ func (e *Engine) verify(ctx context.Context, st *State, dir string) (string, err
 		Env:     offlineEnv(e.Project),
 		Mounts: append(e.Workspace.AgentMounts(e.Ticket.ID),
 			container.Mount{Type: container.Bind, Source: filepath.Join(root, e.Project.Agent.EnvTemplate), Target: "/work/.env", ReadOnly: true}),
-	}}
+	}}, nil
+}
+
+// red は、p5-test の後に、検証のコンテナでテストのコマンドだけを実行し、新しいテストが失敗する（終了コードが0以外）ことを
+// 確かめる（M3）。0なら green（実装の前なのに通った）として p5-test へ差し戻す。
+func (e *Engine) red(ctx context.Context, dir string) (string, error) {
+	g, err := e.verifyGate("red")
+	if err != nil {
+		return "", err
+	}
+	var cmds []gate.Command
+	for _, c := range gate.Commands(e.Project.Verify) {
+		if c.Name == "test" {
+			cmds = append(cmds, c)
+		}
+	}
+	results, _, err := g.Run(ctx, cmds)
+	if err != nil {
+		return "", err
+	}
+	r := results[0]
+	e.writeDiag(filepath.Join(dir, "red-test.log"), []byte(r.Output))
+	e.log("red", map[string]any{"exitCode": r.ExitCode, "seconds": r.Duration.Seconds()})
+	if r.ExitCode != 0 {
+		return "red", nil
+	}
+	e.print = VerifyFingerprint(map[string]string{"test": r.Output})
+	e.lastVerify = fmt.Sprintf("## test（終了コード %d）：`%s`\n\n%s\n", r.ExitCode, r.Cmd, r.Output)
+	return "green", nil
+}
+
+// verify は、検証コマンドを実行する。不合格なら、出力の指紋を作る。
+func (e *Engine) verify(ctx context.Context, st *State, dir string) (string, error) {
+	g, err := e.verifyGate("verify")
+	if err != nil {
+		return "", err
+	}
 	results, passed, err := g.Run(ctx, gate.Commands(e.Project.Verify))
 	var all strings.Builder
 	failed := map[string]string{}
@@ -601,6 +660,8 @@ func (e *Engine) verify(ctx context.Context, st *State, dir string) (string, err
 // feedbackFor は、ループで戻るときに次の step へ渡す差し戻しの内容を作る。
 func (e *Engine) feedbackFor(step string) string {
 	switch step {
+	case "red":
+		return "# 新しいテストが失敗していない\n\n実装の前なのに、テストのコマンドが合格した。受入条件を確かめるテストになっているか（まだない振る舞いを確かめているか）を見直して書き直す。\n\n" + e.lastVerify
 	case "verify":
 		return "# 検証のコマンドの不合格\n\n次の検証のコマンドが不合格だった。直してから、もう一度すべて合格することを確かめる。\n\n" + e.lastVerify
 	case "p5-verify":

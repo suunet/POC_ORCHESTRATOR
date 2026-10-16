@@ -89,9 +89,10 @@ const (
 	  "acceptance": [{"id": "UC-001-AC-02", "uc": "UC-001", "content": "ログに必須の項目がある"}],
 	  "testCases": [{"test": "TestLog", "layer": "scenario", "targets": ["UC-001-AC-02"], "content": "項目を確かめる"}],
 	  "sheets": [{"file": ".docs/design/uc/UC-001.md", "change": "受入条件を足す"}]}`
-	p5Done    = `{"outcome": "done", "summary": "実装した", "verify": [{"name": "build", "exitCode": 0}, {"name": "test", "exitCode": 0}, {"name": "lint", "exitCode": 0}], "tests": [{"test": "TestLog", "file": "backend/tests/scenario/log_test.go", "acceptance": ["UC-001-AC-02"]}]}`
-	vApproved = `{"outcome": "approved", "summary": "突き合わせた"}`
-	vMust     = `{"outcome": "needs_fix", "summary": "直す", "findings": [{"label": "MUST", "finding": "エラーを無視している", "evidence": {"file": "backend/log.go", "line": 3}}]}`
+	p5TestDone = `{"outcome": "done", "summary": "テストを書いた", "tests": [{"test": "TestLog", "file": "backend/tests/scenario/log_test.go", "acceptance": ["UC-001-AC-02"]}]}`
+	p5Done     = `{"outcome": "done", "summary": "実装した", "verify": [{"name": "build", "exitCode": 0}, {"name": "test", "exitCode": 0}, {"name": "lint", "exitCode": 0}], "tests": [{"test": "TestLog", "file": "backend/tests/scenario/log_test.go", "acceptance": ["UC-001-AC-02"]}]}`
+	vApproved  = `{"outcome": "approved", "summary": "突き合わせた"}`
+	vMust      = `{"outcome": "needs_fix", "summary": "直す", "findings": [{"label": "MUST", "finding": "エラーを無視している", "evidence": {"file": "backend/log.go", "line": 3}}]}`
 )
 
 // flowWorkspace は、workspace の偽物。書き出しでカタログを展開する。
@@ -112,6 +113,8 @@ type flowWorkspace struct {
 	beforePrepare   func()            // あれば Prepare の始めに呼ぶ（M2.8）
 	mergedExtra     map[string]string // main と合わせた木で、カタログのファイルの末尾に足す行（M2.9）
 	mergedConflict  bool
+	testsChanged    []string // TestsChanged が返すファイル（M3）
+	unchangedTests  bool     // p5-test のコミットで変更がなかったことにする（M3）
 }
 
 func (w *flowWorkspace) Prepare(_ context.Context, _, _, _ string, _ *config.Deps, opt workspace.PrepareOptions) (workspace.Prepared, error) {
@@ -154,6 +157,9 @@ func (w *flowWorkspace) ReviewerMounts(id string) []container.Mount {
 }
 func (w *flowWorkspace) CommitHash(_ context.Context, _, msg string, _ workspace.Author) (string, bool, error) {
 	w.commits = append(w.commits, msg)
+	if w.unchangedTests && strings.HasPrefix(msg, "test(") {
+		return fmt.Sprintf("c%d", len(w.commits)), false, nil
+	}
 	return fmt.Sprintf("c%d", len(w.commits)), true, nil
 }
 func (w *flowWorkspace) Import(_ context.Context, _, branch string) error {
@@ -184,6 +190,9 @@ func (w *flowWorkspace) Diff(context.Context, string, string) (string, error) {
 	return "diff --git a/backend/log.go b/backend/log.go\n+code\ndiff --git a/.docs/design/uc/UC-001.md b/.docs/design/uc/UC-001.md\n+UC-001 のログの項目\n", nil
 }
 func (w *flowWorkspace) Tracked(_ context.Context, _, path string) bool { return w.tracked[path] }
+func (w *flowWorkspace) TestsChanged(context.Context, string, string) ([]string, error) {
+	return w.testsChanged, nil
+}
 func (w *flowWorkspace) TreeHash(context.Context, string) (string, error) {
 	w.treeCall++
 	if w.treeCall <= len(w.trees) {
@@ -202,7 +211,9 @@ type flowRunner struct {
 	inputs    map[string][]map[string]string // step → 呼ばれるたびの /in のファイルの中身
 	verifyIdx int
 	// onRun は、エージェントの step が走るたびに呼ぶ（stepDir は step の記録のディレクトリ）。書けない状態を作るのに使う（M2.8）
-	onRun func(step, stepDir string)
+	onRun  func(step, stepDir string)
+	reds   int // red の確かめの回数（M3）
+	greens int // red の確かめのうち、最初の greens 回はテストが通ってしまったことにする
 }
 
 func newRunner(results map[string][]string) *flowRunner {
@@ -210,7 +221,7 @@ func newRunner(results map[string][]string) *flowRunner {
 }
 
 func stepOf(name string) string {
-	for _, s := range []string{"p5-verify", "p2-review", "p2-arbitrate", "p3-prepare", "p5"} {
+	for _, s := range []string{"p5-verify", "p2-review", "p2-arbitrate", "p3-prepare", "p5-test", "p5-implement"} {
 		if strings.HasSuffix(name, "-"+s) {
 			return s
 		}
@@ -220,6 +231,15 @@ func stepOf(name string) string {
 
 func (f *flowRunner) Run(_ context.Context, spec container.Spec, stdout, _ io.Writer) (int, error) {
 	step := stepOf(spec.Name)
+	if strings.HasSuffix(spec.Name, "-red-test") { // red：新しいテストが失敗するか（M3）
+		f.reds++
+		if f.reds <= f.greens {
+			io.WriteString(stdout, "PASS\n")
+			return 0, nil
+		}
+		io.WriteString(stdout, "FAIL TestLog\n")
+		return 1, nil
+	}
 	if step == "" { // 検証コマンド
 		i := f.verifyIdx
 		f.verifyIdx++
@@ -352,7 +372,7 @@ func readState(t *testing.T, runDir string) *engine.State {
 // 関門以外の介入なしで、P2 → P3 → approve → P5 → 検証 → P5後 → ready-for-review まで進む。
 func TestRun_FullFlow(t *testing.T) {
 	f := newFlow(t, flowTicket, map[string][]string{
-		"p2-review": {p2Approved}, "p3-prepare": {p3Done}, "p5": {p5Done}, "p5-verify": {vApproved},
+		"p2-review": {p2Approved}, "p3-prepare": {p3Done}, "p5-test": {p5TestDone}, "p5-implement": {p5Done}, "p5-verify": {vApproved},
 	})
 	res := mustRun(t, f)
 	if res.Outcome != engine.Gate || f.status(t) != ticket.ReadyToApprove || !strings.Contains(res.Next, "approve T-002") {
@@ -381,8 +401,11 @@ func TestRun_FullFlow(t *testing.T) {
 	if res.Outcome != engine.Gate || f.status(t) != ticket.ReadyForReview {
 		t.Fatalf("2回目 = %+v, status %s", res, f.status(t))
 	}
-	if len(f.ws.commits) != 2 || !strings.HasPrefix(f.ws.commits[1], "feat(T-002): ") || len(f.ws.imports) != 2 {
+	if len(f.ws.commits) != 3 || !strings.HasPrefix(f.ws.commits[1], "test(T-002): ") || !strings.HasPrefix(f.ws.commits[2], "feat(T-002): ") || len(f.ws.imports) != 2 {
 		t.Errorf("P5 のコミットと取り込み = %q, %q", f.ws.commits, f.ws.imports)
+	}
+	if f.runner.reds != 1 {
+		t.Errorf("red の確かめ = %d 回", f.runner.reds)
 	}
 
 	// BJ（P5後）に渡すのは、指示書・DEV の結果・diff・検証の出力だけで、clone は読み取り専用。
@@ -578,10 +601,10 @@ func TestRun_EvidenceNotPlanned(t *testing.T) {
 // P5 後に、対象ID の予定の ID がカタログになければ、P5 へ差し戻す（Q-24）。
 func TestRun_TargetIDMissingAfterP5(t *testing.T) {
 	body := strings.Replace(approvedTicket(t), "| ブランチ |", "| 対象ID | UC-001、UC-009 |\n| ブランチ |", 1)
-	f := newFlow(t, body, map[string][]string{"p5": {p5Done}, "p5-verify": {vApproved}})
+	f := newFlow(t, body, map[string][]string{"p5-implement": {p5Done}, "p5-verify": {vApproved}})
 	res := mustRun(t, f)
-	if f.runner.calls["p5"] < 2 || res.Outcome != engine.Stopped {
-		t.Fatalf("res = %+v, P5 の呼び出し = %d", res, f.runner.calls["p5"])
+	if f.runner.calls["p5-implement"] < 2 || res.Outcome != engine.Stopped {
+		t.Fatalf("res = %+v, P5 の呼び出し = %d", res, f.runner.calls["p5-implement"])
 	}
 	log, _ := os.ReadFile(filepath.Join(res.RunDir, "log.jsonl"))
 	if !strings.Contains(string(log), `"target-ids-missing"`) || !strings.Contains(string(log), "UC-009") {
@@ -607,14 +630,14 @@ func approvedTicket(t *testing.T) string {
 
 // 検証に不合格なら、失敗の内容を付けて P5 へ戻す。
 func TestRun_VerifyLoop(t *testing.T) {
-	f := newFlow(t, approvedTicket(t), map[string][]string{"p5": {p5Done}, "p5-verify": {vApproved}})
+	f := newFlow(t, approvedTicket(t), map[string][]string{"p5-implement": {p5Done}, "p5-verify": {vApproved}})
 	f.runner.codes = []int{0, 1, 0, 0, 0, 0}
 	f.runner.outputs = []string{"ok", "--- FAIL: TestLog (0.1s)", "ok", "ok", "ok", "ok"}
 	res := mustRun(t, f)
-	if res.Outcome != engine.Gate || f.runner.calls["p5"] != 2 {
-		t.Fatalf("res = %+v, P5 の呼び出し = %d", res, f.runner.calls["p5"])
+	if res.Outcome != engine.Gate || f.runner.calls["p5-implement"] != 2 {
+		t.Fatalf("res = %+v, P5 の呼び出し = %d", res, f.runner.calls["p5-implement"])
 	}
-	if fb := f.runner.inputs["p5"][1]["/in/feedback.md"]; !strings.Contains(fb, "TestLog") {
+	if fb := f.runner.inputs["p5-implement"][1]["/in/feedback.md"]; !strings.Contains(fb, "TestLog") {
 		t.Errorf("2回目の P5 に差し戻しの内容が渡されていない: %q", fb)
 	}
 	if s := readState(t, res.RunDir); s.Loops["verify"] != 1 {
@@ -624,7 +647,7 @@ func TestRun_VerifyLoop(t *testing.T) {
 
 // ループの往復が上限を超えたら、再開の位置を残して止める。
 func TestRun_LoopLimit(t *testing.T) {
-	f := newFlow(t, approvedTicket(t), map[string][]string{"p5": {p5Done}})
+	f := newFlow(t, approvedTicket(t), map[string][]string{"p5-implement": {p5Done}})
 	f.e.Project.Limits = &config.Limits{Loops: 2}
 	for i := range 30 {
 		f.runner.codes = append(f.runner.codes, 1)
@@ -634,24 +657,24 @@ func TestRun_LoopLimit(t *testing.T) {
 	if res.Outcome != engine.Stopped || res.Reason != "limit-loops" {
 		t.Fatalf("res = %+v", res)
 	}
-	if f.runner.calls["p5"] != 3 {
-		t.Errorf("P5 の呼び出し = %d, want 3（最初と2往復）", f.runner.calls["p5"])
+	if f.runner.calls["p5-implement"] != 3 {
+		t.Errorf("P5 の呼び出し = %d, want 3（最初と2往復）", f.runner.calls["p5-implement"])
 	}
-	if s := readState(t, res.RunDir); s.Resume != "p5" || s.Stopped == nil {
+	if s := readState(t, res.RunDir); s.Resume != "p5-implement" || s.Stopped == nil {
 		t.Errorf("state = %+v", s)
 	}
 }
 
 // 同じ検証の失敗（所要時間などを除いて同じ出力）が続いたら、上限の前でも止める。
 func TestRun_NoProgressVerify(t *testing.T) {
-	f := newFlow(t, approvedTicket(t), map[string][]string{"p5": {p5Done}})
+	f := newFlow(t, approvedTicket(t), map[string][]string{"p5-implement": {p5Done}})
 	for i := range 30 {
 		f.runner.codes = append(f.runner.codes, 1)
 		f.runner.outputs = append(f.runner.outputs, fmt.Sprintf("--- FAIL: TestLog (0.%ds)", i))
 	}
 	res := mustRun(t, f)
-	if res.Outcome != engine.Stopped || res.Reason != "no-progress" || f.runner.calls["p5"] != 2 {
-		t.Fatalf("res = %+v, P5 の呼び出し = %d", res, f.runner.calls["p5"])
+	if res.Outcome != engine.Stopped || res.Reason != "no-progress" || f.runner.calls["p5-implement"] != 2 {
+		t.Fatalf("res = %+v, P5 の呼び出し = %d", res, f.runner.calls["p5-implement"])
 	}
 	// 正規化の前と後の両方を記録に残す。
 	matches, _ := filepath.Glob(filepath.Join(res.RunDir, "steps", "*", "fingerprint-*.txt"))
@@ -662,7 +685,7 @@ func TestRun_NoProgressVerify(t *testing.T) {
 
 // 前回と同じ MUST の指摘が残っていたら止める。
 func TestRun_NoProgressReview(t *testing.T) {
-	f := newFlow(t, approvedTicket(t), map[string][]string{"p5": {p5Done}, "p5-verify": {vMust}})
+	f := newFlow(t, approvedTicket(t), map[string][]string{"p5-implement": {p5Done}, "p5-verify": {vMust}})
 	res := mustRun(t, f)
 	if res.Outcome != engine.Stopped || res.Reason != "no-progress" || f.runner.calls["p5-verify"] != 2 {
 		t.Fatalf("res = %+v, P5後 の呼び出し = %d", res, f.runner.calls["p5-verify"])
@@ -671,7 +694,7 @@ func TestRun_NoProgressReview(t *testing.T) {
 
 // 差し戻しの後の P5 で作業ツリーが変わらなければ止める。
 func TestRun_NoProgressDiff(t *testing.T) {
-	f := newFlow(t, approvedTicket(t), map[string][]string{"p5": {p5Done}})
+	f := newFlow(t, approvedTicket(t), map[string][]string{"p5-implement": {p5Done}})
 	f.ws.trees = []string{"same", "same"}
 	f.runner.codes = []int{0, 1, 0, 0, 1, 0}
 	f.runner.outputs = []string{"ok", "--- FAIL: A", "ok", "ok", "--- FAIL: B", "ok"}
@@ -683,7 +706,7 @@ func TestRun_NoProgressDiff(t *testing.T) {
 
 // step の数が上限を超えたら止める。
 func TestRun_StepLimit(t *testing.T) {
-	f := newFlow(t, approvedTicket(t), map[string][]string{"p5": {p5Done}, "p5-verify": {vApproved}})
+	f := newFlow(t, approvedTicket(t), map[string][]string{"p5-implement": {p5Done}, "p5-verify": {vApproved}})
 	f.e.Project.Limits = &config.Limits{Steps: 2}
 	res := mustRun(t, f)
 	if res.Outcome != engine.Stopped || res.Reason != "limit-steps" {
@@ -697,8 +720,8 @@ func TestRun_StepLimit(t *testing.T) {
 // blocked で止まり、人が原因を直した後に resume で続けられる。
 func TestRun_BlockedAndResume(t *testing.T) {
 	f := newFlow(t, approvedTicket(t), map[string][]string{
-		"p5":        {`{"outcome": "blocked", "summary": "依存", "blockReason": {"kind": "dependency", "detail": "x がない"}}`, p5Done},
-		"p5-verify": {vApproved},
+		"p5-implement": {`{"outcome": "blocked", "summary": "依存", "blockReason": {"kind": "dependency", "detail": "x がない"}}`, p5Done},
+		"p5-verify":    {vApproved},
 	})
 	res := mustRun(t, f)
 	if res.Outcome != engine.Stopped || res.Reason != "blocked" || !strings.Contains(res.Next, "resume T-002") || f.status(t) != ticket.Implementing {
@@ -716,10 +739,10 @@ func TestRun_BlockedAndResume(t *testing.T) {
 
 // 出力の形が2回続けて違えば止める。
 func TestRun_InvalidOutput(t *testing.T) {
-	f := newFlow(t, approvedTicket(t), map[string][]string{"p5": {`{"outcome": "done"}`}})
+	f := newFlow(t, approvedTicket(t), map[string][]string{"p5-implement": {`{"outcome": "done"}`}})
 	res := mustRun(t, f)
-	if res.Outcome != engine.Stopped || res.Reason != "invalid-output" || f.runner.calls["p5"] != 2 {
-		t.Fatalf("res = %+v, P5 の呼び出し = %d", res, f.runner.calls["p5"])
+	if res.Outcome != engine.Stopped || res.Reason != "invalid-output" || f.runner.calls["p5-implement"] != 2 {
+		t.Fatalf("res = %+v, P5 の呼び出し = %d", res, f.runner.calls["p5-implement"])
 	}
 }
 
@@ -845,5 +868,75 @@ func TestHuman_Done(t *testing.T) {
 		if err := engine.Human(f.e.Ticket, f.e.Workflow, "done", f.e.Now(), merged); err == nil {
 			t.Errorf("%s から done できた", status)
 		}
+	}
+}
+
+// testedTicket は、§4.3 にテストケースが1件ある承認済みの指示書（p5-test と red を通る。M3）。
+func testedTicket(t *testing.T) string {
+	t.Helper()
+	return strings.Replace(approvedTicket(t), "| テスト | 層（単体／シナリオ） | 受入条件・観点 | 内容 |\n| --- | --- | --- | --- |\n",
+		"| テスト | 層（単体／シナリオ） | 受入条件・観点 | 内容 |\n| --- | --- | --- | --- |\n| TestLog | シナリオ | UC-001-AC-02 | 項目を確かめる |\n", 1)
+}
+
+// §4.3 があれば、p5-test → red（テストが失敗する）→ p5-implement の順に進み、テストのコミットを分ける（M3）。
+func TestRun_P5TestRedImplement(t *testing.T) {
+	f := newFlow(t, testedTicket(t), map[string][]string{"p5-test": {p5TestDone}, "p5-implement": {p5Done}, "p5-verify": {vApproved}})
+	res := mustRun(t, f)
+	if f.status(t) != ticket.ReadyForReview || f.runner.calls["p5-test"] != 1 || f.runner.reds != 1 {
+		t.Fatalf("res = %+v, p5-test %d, red %d", res, f.runner.calls["p5-test"], f.runner.reds)
+	}
+	if len(f.ws.commits) != 2 || !strings.HasPrefix(f.ws.commits[0], "test(T-002): ") {
+		t.Errorf("コミット = %q", f.ws.commits)
+	}
+	if s := readState(t, res.RunDir); len(s.TestCommits) != 1 || s.TestCommits[0] != "c1" {
+		t.Errorf("TestCommits = %v", s.TestCommits)
+	}
+}
+
+// 新しいテストが実装の前に通ってしまったら（green）、テストの出力を付けて p5-test へ戻す（M3）。
+func TestRun_GreenLoopsToP5Test(t *testing.T) {
+	f := newFlow(t, testedTicket(t), map[string][]string{"p5-test": {p5TestDone}, "p5-implement": {p5Done}, "p5-verify": {vApproved}})
+	f.runner.greens = 1
+	mustRun(t, f)
+	if f.status(t) != ticket.ReadyForReview || f.runner.calls["p5-test"] != 2 || f.runner.reds != 2 {
+		t.Fatalf("p5-test %d, red %d, status %s", f.runner.calls["p5-test"], f.runner.reds, f.status(t))
+	}
+	if fb := f.runner.inputs["p5-test"][1]["/in/feedback.md"]; !strings.Contains(fb, "新しいテストが失敗していない") || !strings.Contains(fb, "PASS") {
+		t.Errorf("2回目の p5-test に差し戻しの内容が渡されていない: %q", fb)
+	}
+}
+
+// p5-implement が p5-test のテストのファイルを変えた（消した）ら、検証の前に人の確認待ちで止める（M3 の完了の基準）。
+func TestRun_TestModifiedStops(t *testing.T) {
+	f := newFlow(t, testedTicket(t), map[string][]string{"p5-test": {p5TestDone}, "p5-implement": {p5Done}, "p5-verify": {vApproved}})
+	f.ws.testsChanged = []string{"backend/tests/scenario/log_test.go"}
+	res := mustRun(t, f)
+	if res.Outcome != engine.Stopped || res.Reason != "test-modified" || !strings.Contains(res.Message, "log_test.go") {
+		t.Fatalf("res = %+v", res)
+	}
+	if f.runner.verifyIdx != 0 || len(f.ws.imports) != 0 {
+		t.Errorf("止めた後に検証 %d 回・取り込み %v", f.runner.verifyIdx, f.ws.imports)
+	}
+	if s := readState(t, res.RunDir); s.Resume != "p5-implement" {
+		t.Errorf("resume = %q", s.Resume)
+	}
+}
+
+// p5-test がテストを1つも書かなかったら（コミットする変更がない）、p5-test へ戻す（M3）。
+func TestRun_P5TestWithoutChange(t *testing.T) {
+	f := newFlow(t, testedTicket(t), map[string][]string{"p5-test": {p5TestDone}, "p5-implement": {p5Done}, "p5-verify": {vApproved}})
+	f.ws.unchangedTests = true
+	res := mustRun(t, f)
+	if res.Outcome != engine.Stopped || f.runner.calls["p5-test"] < 2 || f.runner.reds != 0 {
+		t.Fatalf("res = %+v, p5-test %d, red %d", res, f.runner.calls["p5-test"], f.runner.reds)
+	}
+}
+
+// §4.3 が0件なら、p5-test と red を飛ばす（M3）。
+func TestRun_SkipP5TestWithoutTestCases(t *testing.T) {
+	f := newFlow(t, approvedTicket(t), map[string][]string{"p5-implement": {p5Done}, "p5-verify": {vApproved}})
+	mustRun(t, f)
+	if f.status(t) != ticket.ReadyForReview || f.runner.calls["p5-test"] != 0 || f.runner.reds != 0 {
+		t.Fatalf("p5-test %d, red %d, status %s", f.runner.calls["p5-test"], f.runner.reds, f.status(t))
 	}
 }

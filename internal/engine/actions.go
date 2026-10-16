@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"gateflow/internal/idcheck"
@@ -26,6 +27,10 @@ func (e *Engine) doActions(ctx context.Context, st *State, step string, actions 
 			}
 		case "commit":
 			err = e.commit(ctx, st, step)
+		case "commit-tests":
+			fail, err = e.commitTests(ctx, st)
+		case "check-tests-unchanged":
+			err = e.checkTestsUnchanged(ctx, st)
 		case "check-acceptance":
 			fail, err = e.checkAcceptance(ctx)
 		case "check-ids":
@@ -119,6 +124,53 @@ func (e *Engine) commit(ctx context.Context, st *State, step string) error {
 	st.Commit = hash
 	st.Commits = append(st.Commits, hash)
 	e.log("commit", map[string]any{"message": msg, "commit": hash, "changed": changed})
+	return nil
+}
+
+// commitTests は、p5-test が書いたテストをコミットして、その位置を覚える（M3）。変更がなければ差し戻す。
+func (e *Engine) commitTests(ctx context.Context, st *State) (string, error) {
+	t := e.Ticket
+	msg := fmt.Sprintf("test(%s): %s（テスト）", t.ID, t.Title)
+	if i := e.Project.Issue; i != nil && i.CommitRef != "" && t.IssueID() != "" {
+		msg += " " + i.Format(i.CommitRef, t.IssueID())
+	}
+	hash, changed, err := e.Workspace.CommitHash(ctx, t.ID, msg, e.Author)
+	if err != nil {
+		return "", err
+	}
+	e.log("commit", map[string]any{"message": msg, "commit": hash, "changed": changed})
+	if !changed {
+		return "テストのファイルが1つも変わっていない。指示書の§4.3 のテストケースのテストを書く", nil
+	}
+	st.Commit = hash
+	st.Commits = append(st.Commits, hash)
+	st.TestCommits = append(st.TestCommits, hash)
+	return "", nil
+}
+
+// stopTestModified は、p5-implement が p5-test のテストのファイルを変えた（消した）ときの止まる理由（M3）。
+const stopTestModified = "test-modified"
+
+// checkTestsUnchanged は、p5-test のコミットで書いたファイルを、p5-implement の後の作業ツリーと比べる（M3）。
+// 変わって（消されて）いれば、テストを書き換えて通そうとした恐れがあるので、人の確認待ちで止める。テストのファイルを足すのはよい。
+func (e *Engine) checkTestsUnchanged(ctx context.Context, st *State) error {
+	var changed []string
+	for _, c := range st.TestCommits {
+		files, err := e.Workspace.TestsChanged(ctx, e.Ticket.ID, c)
+		if err != nil {
+			return err
+		}
+		for _, f := range files {
+			if !slices.Contains(changed, f) {
+				changed = append(changed, f)
+			}
+		}
+	}
+	e.log("check-tests-unchanged", map[string]any{"commits": st.TestCommits, "changed": changed})
+	if len(changed) > 0 {
+		return &errStop{reason: stopTestModified, detail: "p5-implement が、p5-test で書いたテストのファイルを変えた（消した）：" + strings.Join(changed, "、") +
+			"。テストの誤りなら test_defect で報告する決まり。変更を確かめて、人が決める"}
+	}
 	return nil
 }
 

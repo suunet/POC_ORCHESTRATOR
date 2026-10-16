@@ -159,7 +159,7 @@ func TestRun_LogWriteFailureGoesToStderr(t *testing.T) {
 func TestRun_FeedbackWriteFailureStops(t *testing.T) {
 	approved := strings.Replace(flowTicket, "ステータス: ready-to-prepare", "ステータス: ready-to-implement", 1)
 	approved = strings.ReplaceAll(approved, "- [ ]", "- [x]")
-	f := newFlow(t, approved, map[string][]string{"p5": {p5Done}, "p5-verify": {vMust, vApproved}})
+	f := newFlow(t, approved, map[string][]string{"p5-implement": {p5Done}, "p5-verify": {vMust, vApproved}})
 	f.runner.onRun = func(step, stepDir string) {
 		if step == "p5-verify" {
 			blockWith(t, filepath.Join(stepDir, "feedback.md"))
@@ -169,7 +169,7 @@ func TestRun_FeedbackWriteFailureStops(t *testing.T) {
 	if res.Outcome != engine.Stopped || res.Reason != "write-failed" || !strings.Contains(res.Message, "feedback.md") {
 		t.Fatalf("res = %+v", res)
 	}
-	if f.runner.calls["p5"] != 1 {
+	if f.runner.calls["p5-implement"] != 1 {
 		t.Errorf("差し戻しの内容が書けないのに P5 をやり直した")
 	}
 }
@@ -244,7 +244,7 @@ func TestRun_WaitsForAgentQueue(t *testing.T) {
 // 取り込みの前に、main と作業ブランチを合わせた木で ID 整合チェックを行い、重なれば取り込まずに止める（M2.9）。
 func TestRun_MainIDsDuplicateStopsBeforeImport(t *testing.T) {
 	approved := strings.ReplaceAll(strings.Replace(flowTicket, "ステータス: ready-to-prepare", "ステータス: ready-to-implement", 1), "- [ ]", "- [x]")
-	f := newFlow(t, approved, map[string][]string{"p5": {p5Done}, "p5-verify": {vApproved}})
+	f := newFlow(t, approved, map[string][]string{"p5-implement": {p5Done}, "p5-verify": {vApproved}})
 	f.ws.mergedExtra = map[string]string{".docs/design/buc.md": "| BUC-S02 | UC-001（ほかのチケットの UC） |\n"}
 	res := mustRun(t, f)
 	if res.Outcome != engine.Stopped || res.Reason != "id-duplicate" || !strings.Contains(res.Message, "UC-001") {
@@ -258,7 +258,7 @@ func TestRun_MainIDsDuplicateStopsBeforeImport(t *testing.T) {
 // 合わせると衝突するときは、検査できないので警告を残して進む（衝突は人のマージで出る。done で main を検査する）。
 func TestRun_MainIDsConflictWarns(t *testing.T) {
 	approved := strings.ReplaceAll(strings.Replace(flowTicket, "ステータス: ready-to-prepare", "ステータス: ready-to-implement", 1), "- [ ]", "- [x]")
-	f := newFlow(t, approved, map[string][]string{"p5": {p5Done}, "p5-verify": {vApproved}})
+	f := newFlow(t, approved, map[string][]string{"p5-implement": {p5Done}, "p5-verify": {vApproved}})
 	f.ws.mergedConflict = true
 	res := mustRun(t, f)
 	if f.status(t) != ticket.ReadyForReview || len(f.ws.imports) != 1 || len(res.Warnings) == 0 {
@@ -313,7 +313,7 @@ func TestRun_P3SkipsTestMissing(t *testing.T) {
 // levels で推奨にした検証のコマンドは、不合格でも止めずに推奨の指摘として残し、レビューで提示する（M3）。
 func TestRun_RecommendedVerify(t *testing.T) {
 	approved := strings.ReplaceAll(strings.Replace(flowTicket, "ステータス: ready-to-prepare", "ステータス: ready-to-implement", 1), "- [ ]", "- [x]")
-	f := newFlow(t, approved, map[string][]string{"p5": {p5Done}, "p5-verify": {vApproved}})
+	f := newFlow(t, approved, map[string][]string{"p5-implement": {p5Done}, "p5-verify": {vApproved}})
 	f.e.Project.Levels = map[string]string{"lint": "recommended"}
 	f.runner.codes = []int{0, 0, 1} // build・test は合格、lint は不合格
 	res := mustRun(t, f)
@@ -325,10 +325,10 @@ func TestRun_RecommendedVerify(t *testing.T) {
 		t.Errorf("recommended.md:\n%s", b)
 	}
 	// 必須のまま（既定）なら、同じ不合格で P5 へ戻る
-	g := newFlow(t, approved, map[string][]string{"p5": {p5Done}, "p5-verify": {vApproved}})
+	g := newFlow(t, approved, map[string][]string{"p5-implement": {p5Done}, "p5-verify": {vApproved}})
 	g.runner.codes = []int{0, 0, 1, 0, 0, 0}
 	mustRun(t, g)
-	if g.runner.calls["p5"] != 2 {
-		t.Errorf("必須の lint の不合格で P5 へ戻っていない（P5 の呼び出し %d）", g.runner.calls["p5"])
+	if g.runner.calls["p5-implement"] != 2 {
+		t.Errorf("必須の lint の不合格で P5 へ戻っていない（P5 の呼び出し %d）", g.runner.calls["p5-implement"])
 	}
 }
