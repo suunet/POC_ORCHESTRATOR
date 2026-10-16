@@ -59,13 +59,8 @@ func (e Egress) ProxySpec(allow []string) Spec {
 
 // Start は、内部ネットワークを用意し、allow を許可リストとするプロキシを起動して、エージェントに渡すプロキシの URL を返す。
 func (e Egress) Start(ctx context.Context, allow []string) (string, error) {
-	if _, err := e.Docker.Exec(ctx, "network", "inspect", e.Network()); err != nil {
-		if _, err := e.Docker.Exec(ctx, "network", "create", "--internal", e.Network()); err != nil {
-			// 同時に作った別の実行が先に作ったなら、それを使う
-			if _, ierr := e.Docker.Exec(ctx, "network", "inspect", e.Network()); ierr != nil {
-				return "", fmt.Errorf("内部ネットワークを作れない: %w", err)
-			}
-		}
+	if err := ensureInternalNetwork(ctx, e.Docker, e.Network()); err != nil {
+		return "", fmt.Errorf("内部ネットワークを作れない: %w", err)
 	}
 	// 自分の名前のプロキシ（同じ持ち主の前の実行の残り）だけを消す。ほかの実行のプロキシは消さない
 	e.Docker.Exec(ctx, "rm", "--force", e.proxyName())

@@ -120,6 +120,8 @@ func TestLoadProject_Invalid(t *testing.T) {
 		{"書式のバージョンがない", projectWith(t, "formatVersion", ""), []string{"formatVersion"}},
 		{"levels の知らない検査", projectWith(t, "levels", `{"diff-size": "recommended"}`), []string{"levels", "diff-size"}},
 		{"levels の知らないレベル", projectWith(t, "levels", `{"lint": "optional"}`), []string{"levels", "optional"}},
+		{"services の知らない方式", projectWith(t, "services", `{"mode": "per-task", "compose": "c.yaml", "names": ["db"]}`), []string{"services", "per-task"}},
+		{"services の names がない", projectWith(t, "services", `{"mode": "shared", "compose": "c.yaml"}`), []string{"services", "names"}},
 		{"touchMap の docs がない", projectWith(t, "touchMap", `[{"code": "backend/**"}]`), []string{"touchMap", "docs"}},
 		{"touchMap のグロブの誤り", projectWith(t, "touchMap", `[{"code": "backend/[", "docs": ["x/"]}]`), []string{"touchMap", "backend/["}},
 		{"書式のバージョン1は拒否する", projectWith(t, "formatVersion", "1"), []string{"formatVersion", "1"}},

@@ -96,6 +96,15 @@ func TestHelperProcess(t *testing.T) {
 				os.Exit(1)
 			}
 		}
+		if strings.HasPrefix(mode, "services") && args[0] == "compose" && slices.Contains(args, "ps") {
+			fmt.Println("cid-db")
+		}
+		if mode == "services-connected" && args[0] == "inspect" {
+			fmt.Println(`{"gateflow-sample-internal":{},"gateflow-sample-services":{}}`)
+		}
+		if mode == "services-no-network" && args[0] == "network" && args[1] == "inspect" {
+			os.Exit(1)
+		}
 		if mode == "follow" && args[0] == "logs" {
 			fmt.Println(`{"decision":"deny","target":"example.com:443"}`)
 			fmt.Fprintln(os.Stderr, "stderr の行")

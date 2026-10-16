@@ -220,6 +220,9 @@ func runTickets(ctx context.Context, dir string, ids []string, resume bool, stdo
 			AgentImage: image, Agent: s.agent, Workspace: ws, Egress: egress.For(tk.ID), Runner: s.docker,
 			Author: author, Builtins: builtins.FS(), Rules: s.rules, Now: time.Now, Queue: q,
 		}
+		if sv, ok := projectServices(s.docker, dir, s.project); ok {
+			e.Services = sv
+		}
 		fmt.Fprintf(stdout, "%s を進めています（%s、エージェント：%s）…\n", tk.ID, tk.Status, s.agent.Name())
 		var res engine.Result
 		if resume {
@@ -647,4 +650,47 @@ func mainIDsClean(dir string, project *config.Project) error {
 		return fmt.Errorf("main の ID 整合チェックに必須の指摘がある（ほかのチケットと ID が重なっているかもしれない。main を直してから done する）：%s", strings.Join(msgs, "／"))
 	}
 	return nil
+}
+
+// projectServices は、project.json の services の共有のサービスを返す（なければ ok が false。M3）。
+func projectServices(d container.Docker, dir string, p *config.Project) (container.Services, bool) {
+	if p.Services == nil {
+		return container.Services{}, false
+	}
+	root, err := filepath.Abs(dir)
+	if err != nil {
+		root = dir
+	}
+	return container.Services{Docker: d, Project: p.Name, Root: root, Compose: p.Services.Compose, Names: p.Services.Names}, true
+}
+
+// cmdServices は、gateflow services down：共有のサービスを止めて消す（共有なので run は止めない。人が行う。M3）。
+func cmdServices(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 || args[0] != "down" {
+		fmt.Fprint(stderr, usage)
+		return exitUsage
+	}
+	fs := flag.NewFlagSet("services", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	dir := fs.String("project", ".", "プロジェクトのルート")
+	if err := fs.Parse(args[1:]); err != nil || fs.NArg() > 0 {
+		fmt.Fprint(stderr, usage)
+		return exitUsage
+	}
+	p, err := config.LoadProject(*dir)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
+	sv, ok := projectServices(container.NewDocker(), *dir, p)
+	if !ok {
+		fmt.Fprintln(stdout, "project.json に services がないので、止めるサービスはない")
+		return exitOK
+	}
+	if err := sv.Down(ctx); err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailed
+	}
+	fmt.Fprintf(stdout, "共有のサービス（%s）を止めた\n", strings.Join(p.Services.Names, "・"))
+	return exitOK
 }

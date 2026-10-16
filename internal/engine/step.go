@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -584,7 +585,7 @@ func (e *Engine) verifyGate(name string) (gate.Gate, error) {
 	return gate.Gate{Runner: e.Runner, Base: container.Spec{
 		Name:    fmt.Sprintf("gateflow-%s-%s-%s", e.Project.Name, strings.ToLower(e.Ticket.ID), name),
 		Image:   e.AgentImage,
-		Network: "none",
+		Network: cmp.Or(e.verifyNet, "none"),
 		User:    "agent",
 		Workdir: "/work",
 		Env:     offlineEnv(e.Project),

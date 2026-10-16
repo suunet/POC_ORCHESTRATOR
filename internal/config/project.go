@@ -48,6 +48,18 @@ type Project struct {
 	Levels map[string]string `json:"levels,omitempty"`
 	// TouchMap は、コードのファイルと、それを触ったら確認すべき文書の対応（M3）
 	TouchMap []TouchRule `json:"touchMap,omitempty"`
+	// Services は、DB などのサービス（M3。共有方式だけ）。書かなければサービスを起動しない
+	Services *Services `json:"services,omitempty"`
+}
+
+// ServicesShared は、サービスの共有方式（チケットどうしで同じサービスを使い、止めない）。
+const ServicesShared = "shared"
+
+// Services は、DB などのサービスの扱い。Compose はルートからの相対パス、Names は起動する compose のサービスの名前。
+type Services struct {
+	Mode    string   `json:"mode"`
+	Compose string   `json:"compose"`
+	Names   []string `json:"names"`
 }
 
 // TouchRule は、touchMap の1行。Code はルートからの相対パスのグロブ（** は0個以上のディレクトリ）、
@@ -269,6 +281,14 @@ func LoadProject(root string) (*Project, error) {
 
 func (p *Project) validate() []error {
 	var errs []error
+	if s := p.Services; s != nil {
+		if s.Mode != ServicesShared {
+			errs = append(errs, fmt.Errorf("services：mode %q は作っていない（%s だけ）", s.Mode, ServicesShared))
+		}
+		if s.Compose == "" || len(s.Names) == 0 {
+			errs = append(errs, errors.New("services：compose と names が要る"))
+		}
+	}
 	for i, r := range p.TouchMap {
 		if r.Code == "" || len(r.Docs) == 0 {
 			errs = append(errs, fmt.Errorf("touchMap の %d 行目：code と docs が要る", i+1))

@@ -75,6 +75,11 @@ type Egress interface {
 	Network() string
 }
 
+// Services は、共有の DB などのサービス（M3）。Up は起動して、検証のコンテナを置くネットワークの名前を返す。
+type Services interface {
+	Up(ctx context.Context) (string, error)
+}
+
 // Runner は、コンテナを起動する。
 type Runner interface {
 	Run(ctx context.Context, spec container.Spec, stdout, stderr io.Writer) (int, error)
@@ -92,10 +97,12 @@ type Engine struct {
 	Workspace  Workspace
 	Egress     Egress
 	Runner     Runner
-	Author     workspace.Author
-	Builtins   fs.FS
-	Rules      *idcheck.Rules
-	Now        func() time.Time
+	// Services は、共有のサービス（M3）。なければ起動しない（検証のコンテナはネットワークなし）
+	Services Services
+	Author   workspace.Author
+	Builtins fs.FS
+	Rules    *idcheck.Rules
+	Now      func() time.Time
 	// Stderr は、log.jsonl にも書けないときの出し先（なければ os.Stderr）
 	Stderr io.Writer
 	// Queue は、AI の呼び出しの順番待ちの印（M2.9）。なければ待たない
@@ -106,6 +113,7 @@ type Engine struct {
 	// 1回の実行の中で、step の結果を後の操作に渡す
 	run        *ticket.Run
 	proxyURL   string
+	verifyNet  string // 検証のコンテナを置くネットワーク（共有のサービスの専用のネットワーク。なければ none）
 	lastP3     *output.P3Result
 	lastReview *output.ReviewResult
 	p3IMO      []output.Finding // P3 に渡した P2 の IMO
@@ -432,6 +440,14 @@ func (e *Engine) loopIn(ctx context.Context, run *ticket.Run, st *State, step st
 	e.proxyURL = proxyURL
 	stopProxy := e.followProxy(ctx, run.Dir)
 	defer stopProxy()
+	if e.Services != nil {
+		n, err := e.Services.Up(ctx)
+		if err != nil {
+			return Result{}, err
+		}
+		e.verifyNet = n
+		e.log("services", map[string]any{"network": n})
+	}
 
 	stopped := func(reason, detail, resume string) (Result, error) {
 		st.Stopped = &Stop{Reason: reason, Detail: detail}

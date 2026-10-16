@@ -76,6 +76,6 @@
       "no-progress": "進展なし", "timeout": "時間切れ", "write-failed": "記録を書けない", "interrupted": "中断",
       "id-duplicate": "main と ID が重なる", "test-modified": "テストの書き換え"
     },
-    "commands": {"ready": "要件の確定", "approve": "承認", "done": "完了", "cancel": "中止"}
+    "commands": {"ready": "要件の確定", "approve": "承認", "done": "完了", "cancel": "中止", "services-down": "共有のサービスを止める"}
   }
 }

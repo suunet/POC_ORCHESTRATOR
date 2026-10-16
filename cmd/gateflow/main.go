@@ -43,6 +43,7 @@ const usage = `使い方:
   gateflow doctor sandbox [--project <dir>] エージェントが外へ出られないことを確かめる
   gateflow check [--project <dir>]      すべての検証（ID整合チェックと、チケットの状態が遷移表にあるか）
   gateflow check ids [--project <dir>]  ID整合チェックだけ
+  gateflow services down [--project <dir>]  共有のサービス（DB など）を止める
 `
 
 func main() {
@@ -63,7 +64,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "version":
 		fmt.Fprintf(stdout, "gateflow %s\n", version)
 		return exitOK
-	case "run", "resume", "login", "doctor", "monitor", "arb-trial":
+	case "run", "resume", "login", "doctor", "monitor", "arb-trial", "services":
 		ctx, cancel := signalContext()
 		defer cancel()
 		switch args[0] {
@@ -77,6 +78,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return cmdMonitor(ctx, args[1:], stdout, stderr)
 		case "arb-trial":
 			return cmdARBTrial(ctx, args[1:], stdout, stderr)
+		case "services":
+			return cmdServices(ctx, args[1:], stdout, stderr)
 		default:
 			return cmdDoctor(ctx, args[1:], stdout, stderr)
 		}

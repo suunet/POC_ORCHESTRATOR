@@ -211,9 +211,11 @@ type flowRunner struct {
 	inputs    map[string][]map[string]string // step → 呼ばれるたびの /in のファイルの中身
 	verifyIdx int
 	// onRun は、エージェントの step が走るたびに呼ぶ（stepDir は step の記録のディレクトリ）。書けない状態を作るのに使う（M2.8）
-	onRun  func(step, stepDir string)
-	reds   int // red の確かめの回数（M3）
-	greens int // red の確かめのうち、最初の greens 回はテストが通ってしまったことにする
+	onRun      func(step, stepDir string)
+	reds       int      // red の確かめの回数（M3）
+	greens     int      // red の確かめのうち、最初の greens 回はテストが通ってしまったことにする
+	verifyNets []string // 検証のコンテナのネットワーク（M3）
+	onSpec     func(container.Spec)
 }
 
 func newRunner(results map[string][]string) *flowRunner {
@@ -231,6 +233,9 @@ func stepOf(name string) string {
 
 func (f *flowRunner) Run(_ context.Context, spec container.Spec, stdout, _ io.Writer) (int, error) {
 	step := stepOf(spec.Name)
+	if f.onSpec != nil {
+		f.onSpec(spec)
+	}
 	if strings.HasSuffix(spec.Name, "-red-test") { // red：新しいテストが失敗するか（M3）
 		f.reds++
 		if f.reds <= f.greens {
@@ -241,6 +246,7 @@ func (f *flowRunner) Run(_ context.Context, spec container.Spec, stdout, _ io.Wr
 		return 1, nil
 	}
 	if step == "" { // 検証コマンド
+		f.verifyNets = append(f.verifyNets, spec.Network)
 		i := f.verifyIdx
 		f.verifyIdx++
 		code, out := 0, "ok\n"
@@ -938,5 +944,40 @@ func TestRun_SkipP5TestWithoutTestCases(t *testing.T) {
 	mustRun(t, f)
 	if f.status(t) != ticket.ReadyForReview || f.runner.calls["p5-test"] != 0 || f.runner.reds != 0 {
 		t.Fatalf("p5-test %d, red %d, status %s", f.runner.calls["p5-test"], f.runner.reds, f.status(t))
+	}
+}
+
+type fakeServices struct{ ups int }
+
+func (s *fakeServices) Up(context.Context) (string, error) {
+	s.ups++
+	return "gateflow-sample-services", nil
+}
+
+// 共有のサービスがあれば run の始めに起動し、検証のコンテナ（red を含む）をサービスの専用のネットワークに置く。
+// なければネットワークなし（M3 の Q-10）。
+func TestRun_ServicesNetworkForVerify(t *testing.T) {
+	f := newFlow(t, testedTicket(t), map[string][]string{"p5-test": {p5TestDone}, "p5-implement": {p5Done}, "p5-verify": {vApproved}})
+	sv := &fakeServices{}
+	f.e.Services = sv
+	var redNet string
+	f.runner.onSpec = func(spec container.Spec) {
+		if strings.HasSuffix(spec.Name, "-red-test") {
+			redNet = spec.Network
+		}
+	}
+	mustRun(t, f)
+	if sv.ups != 1 || redNet != "gateflow-sample-services" || len(f.runner.verifyNets) == 0 {
+		t.Fatalf("起動 %d 回、red のネットワーク %q、検証 %v", sv.ups, redNet, f.runner.verifyNets)
+	}
+	for _, n := range f.runner.verifyNets {
+		if n != "gateflow-sample-services" {
+			t.Errorf("検証のコンテナのネットワーク = %q", n)
+		}
+	}
+	g := newFlow(t, approvedTicket(t), map[string][]string{"p5-implement": {p5Done}, "p5-verify": {vApproved}})
+	mustRun(t, g)
+	if g.runner.verifyNets[0] != "none" {
+		t.Errorf("サービスがないのに、検証のコンテナのネットワーク = %q", g.runner.verifyNets[0])
 	}
 }
