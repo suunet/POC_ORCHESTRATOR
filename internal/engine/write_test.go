@@ -195,8 +195,11 @@ func TestRun_LockedTicketDoesNotRun(t *testing.T) {
 	if res := mustRun(t, f); f.status(t) != ticket.ReadyToApprove {
 		t.Errorf("外した後に進めない: %+v", res)
 	}
-	if _, err := os.Stat(filepath.Join(f.root, ".docs/_stash/tickets/T-002", ticket.LockFile)); !os.IsNotExist(err) {
-		t.Error("実行の後に印が残っている")
+	// 実行の後は印が外れている（ファイルは空で残る。M3.1）
+	if u, err := f.e.Ticket.Lock(f.e.Now()); err != nil {
+		t.Errorf("実行の後も印が持たれている: %v", err)
+	} else {
+		u()
 	}
 }
 
@@ -215,8 +218,7 @@ func TestRun_LogsReviewReportAndQuestions(t *testing.T) {
 // AI の呼び出しの順番待ち（M2.9）：ほかが印を持っている間は失敗にせず待ち、待ったことを記録に残す。
 func TestRun_WaitsForAgentQueue(t *testing.T) {
 	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Approved}, "p3-prepare": {p3Done}})
-	q := &queue.Lock{Path: filepath.Join(t.TempDir(), "agent-auth.lock"), Interval: 5 * time.Millisecond,
-		Alive: func(h queue.Holder) bool { return h.PID == 1 }}
+	q := &queue.Lock{Path: filepath.Join(t.TempDir(), "agent-auth.lock"), Interval: 5 * time.Millisecond}
 	release, busy, err := q.TryAcquire(queue.Holder{PID: 1, Start: "S", Project: "other", Ticket: "T-099", Step: "p5"})
 	if err != nil || busy != nil {
 		t.Fatal(err)
@@ -236,8 +238,10 @@ func TestRun_WaitsForAgentQueue(t *testing.T) {
 			t.Errorf("記録に %s がない:\n%s", w, log)
 		}
 	}
-	if _, err := os.Stat(q.Path); !os.IsNotExist(err) {
-		t.Error("実行の後に順番待ちの印が残っている")
+	if rel, busy, err := q.TryAcquire(queue.Holder{PID: 2, Start: "S"}); err != nil || busy != nil {
+		t.Errorf("実行の後も順番待ちの印が持たれている: %+v, %v", busy, err)
+	} else {
+		rel()
 	}
 }
 
