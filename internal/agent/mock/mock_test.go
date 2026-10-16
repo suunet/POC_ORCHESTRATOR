@@ -30,7 +30,7 @@ func TestParseScenario(t *testing.T) {
 	if _, err := mock.ParseScenario([]byte(scenario)); err != nil {
 		t.Fatalf("ParseScenario: %v", err)
 	}
-	for _, bad := range []string{`{}`, `{"steps": {"p5": []}}`, `{"steps": {"p5": [{"files": {}}]}}`, `{"steps": {"p5": [{"result": {}, "files": {"../x": ""}}]}}`} {
+	for _, bad := range []string{`{}`, `{"steps": {"p5": []}}`, `{"steps": {"p5": [{"files": {}}]}}`, `{"steps": {"p5": [{"result": {}, "files": {"../x": ""}}]}}`, `{"steps": {"p5": [{"result": {}, "remove": ["../x"]}]}}`} {
 		if _, err := mock.ParseScenario([]byte(bad)); err == nil {
 			t.Errorf("ParseScenario(%s) が誤りにならない", bad)
 		}

@@ -19,9 +19,11 @@ import (
 )
 
 // Entry は、step の1回分の出力。Result は /out/result.json に、Files は作業ツリー（/work）に書く。
+// Remove は、作業ツリーから消すファイル（テストを消す筋書き。M3）。
 type Entry struct {
 	Result json.RawMessage   `json:"result"`
 	Files  map[string]string `json:"files,omitempty"`
+	Remove []string          `json:"remove,omitempty"`
 }
 
 // Scenario は、筋書き。step ごとに、呼ばれた順に使う出力を並べる。尽きたら最後の出力を繰り返す。
@@ -52,6 +54,11 @@ func ParseScenario(data []byte) (*Scenario, error) {
 			for p := range e.Files {
 				if !filepath.IsLocal(p) || strings.ContainsAny(p, "'\n") {
 					errs = append(errs, fmt.Errorf("筋書きの %s[%d] のファイル %q は作業ツリーの中のパスでない", step, i, p))
+				}
+			}
+			for _, p := range e.Remove {
+				if !filepath.IsLocal(p) || strings.ContainsAny(p, "'\n") {
+					errs = append(errs, fmt.Errorf("筋書きの %s[%d] の消すファイル %q は作業ツリーの中のパスでない", step, i, p))
 				}
 			}
 		}
@@ -102,6 +109,9 @@ func (a *Agent) Command(req agent.Request) ([]string, string) {
 	}
 	for _, p := range paths {
 		write("/work/"+filepath.ToSlash(p), e.Files[p])
+	}
+	for _, p := range e.Remove {
+		fmt.Fprintf(&b, "rm -f '/work/%s'\n", filepath.ToSlash(p))
 	}
 	write("/out/result.json", string(e.Result))
 	return []string{"sh", "-c", b.String()}, ""
