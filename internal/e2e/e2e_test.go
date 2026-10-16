@@ -77,7 +77,9 @@ func (e *env) buildTool() {
 // cleanDocker は、試験のプロジェクトの Docker の残り（作業のボリューム、内部ネットワーク）を消す。
 func cleanDocker() {
 	exec.Command("docker", "volume", "rm", "-f", "gateflow-work-"+project).Run()
+	exec.Command("docker", "compose", "-p", "gateflow-"+project+"-services", "down").Run()
 	exec.Command("docker", "network", "rm", "gateflow-"+project+"-internal").Run()
+	exec.Command("docker", "network", "rm", "gateflow-"+project+"-services").Run()
 }
 
 func (e *env) write(rel, body string) {
@@ -466,5 +468,63 @@ func TestE2E_TestModifiedStops(t *testing.T) {
 		if st.Resume != "p5-implement" || len(e.events(c.id, "verify")) != 0 {
 			t.Errorf("%s：resume %q、検証 %d 回（止めた後に検証しない）", c.id, st.Resume, len(e.events(c.id, "verify")))
 		}
+	}
+}
+
+const composeYAML = `services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 1s
+      retries: 30
+`
+
+// 共有のサービス：run の始めに compose のサービスを起動し、検証のコンテナはサービスの名前で DB に届くが、外へは出られない。
+// gateflow services down で、サービスと専用のネットワークが消える（M3 の Q-10 の C）。
+func TestE2E_SharedServices(t *testing.T) {
+	e := setup(t)
+	cfg := strings.Replace(projectJSON, `"verify": {"build": "go build ./...", "test": "go test ./...", "lint": "go vet ./..."},`,
+		`"verify": {"build": "true", "test": "bash -c 'echo > /dev/tcp/db/5432'", "lint": "bash -c '! (echo > /dev/tcp/example.com/80)'"},
+  "services": {"mode": "shared", "compose": "docker-compose.yaml", "names": ["db"]},`, 1)
+	e.write(".gateflow/project.json", cfg)
+	e.write("docker-compose.yaml", composeYAML)
+	e.git("add", "-A")
+	e.git("commit", "-q", "-m", "chore: サービス")
+	plan := strings.Replace(planFor("TestDB", "UC-001-AC-01"), "| TestDB | シナリオ | UC-001-AC-01 | 計算の結果を確かめる |\n", "", 1)
+	e.ticket("T-004", ticketBody("T-004", "DB を使う", "ready-to-implement", "UC-001", plan))
+	sc := e.scenario("t004", map[string][]map[string]any{
+		"p5-implement": {{"result": map[string]any{"outcome": "done", "summary": "実装した", "verify": verifyOK},
+			"files": map[string]string{"calc/db.go": "package calc\n"}}},
+		"p5-verify": {res(map[string]any{"outcome": "approved", "summary": "突き合わせた"})},
+	})
+	e.gateflow(sc, "run", "T-004")
+	if s := e.status("T-004"); s != "ready-for-review" {
+		t.Fatalf("ステータス = %s、止まった理由 %+v", s, e.state("T-004").Stopped)
+	}
+	if sv := e.events("T-004", "services"); len(sv) != 1 || sv[0]["network"] != "gateflow-"+project+"-services" {
+		t.Errorf("services の記録 = %v", sv)
+	}
+	if n := len(e.events("T-004", "verify")); n != 3 {
+		t.Errorf("検証のコマンドの実行 = %d 回", n)
+	}
+	for _, v := range e.events("T-004", "verify") {
+		if v["exitCode"] != float64(0) {
+			t.Errorf("検証 %v が不合格（DB に届かないか、外へ出られた）", v)
+		}
+	}
+	out, _ := exec.Command("docker", "network", "inspect", "--format", "{{.Internal}}", "gateflow-"+project+"-services").CombinedOutput()
+	if strings.TrimSpace(string(out)) != "true" {
+		t.Errorf("専用のネットワークが --internal でない: %s", out)
+	}
+
+	e.gateflow(sc, "services", "down")
+	if out, _ := exec.Command("docker", "ps", "-a", "-q", "--filter", "label=com.docker.compose.project=gateflow-"+project+"-services").Output(); strings.TrimSpace(string(out)) != "" {
+		t.Errorf("services down の後にサービスのコンテナが残っている: %s", out)
+	}
+	if exec.Command("docker", "network", "inspect", "gateflow-"+project+"-services").Run() == nil {
+		t.Error("services down の後に専用のネットワークが残っている")
 	}
 }
