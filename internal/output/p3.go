@@ -194,3 +194,6 @@ func (r *P3Result) AcceptanceIDs() []string {
 func DescribeP3() string {
 	return describe(ResultPath, P3Result{})
 }
+
+// IsAcceptanceID は、s が受入条件の ID（UC-NNN-AC-NN）の形かを返す（観点表の ID と分けるのに使う。M3）。
+func IsAcceptanceID(s string) bool { return acceptanceID.MatchString(s) }

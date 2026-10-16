@@ -981,3 +981,35 @@ func TestRun_ServicesNetworkForVerify(t *testing.T) {
 		t.Errorf("サービスがないのに、検証のコンテナのネットワーク = %q", g.runner.verifyNets[0])
 	}
 }
+
+// 観点表があれば P3 に /in/viewpoints.csv として渡し、テストケースの targets の観点の ID が観点表にあるかを確かめる（M3）。
+func TestRun_ViewpointsToP3(t *testing.T) {
+	withVP := strings.Replace(p3Done, `"targets": ["UC-001-AC-02"]`, `"targets": ["UC-001-AC-02", "VP-01"]`, 1)
+	unknownVP := strings.Replace(p3Done, `"targets": ["UC-001-AC-02"]`, `"targets": ["UC-001-AC-02", "VP-99"]`, 1)
+	for name, tc := range map[string]struct {
+		out  string
+		gate bool
+	}{"観点表にある": {withVP, true}, "観点表にない": {unknownVP, false}} {
+		t.Run(name, func(t *testing.T) {
+			f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Approved}, "p3-prepare": {tc.out}})
+			os.WriteFile(filepath.Join(f.root, ".gateflow", "viewpoints.csv"), []byte("ID,観点,確認の方法\nVP-01,最大文字数,関数\n"), 0o644)
+			res := mustRun(t, f)
+			if in := f.runner.inputs["p3-prepare"][0]["/in/viewpoints.csv"]; !strings.Contains(in, "VP-01") {
+				t.Errorf("観点表が P3 に渡っていない: %q", in)
+			}
+			if tc.gate && f.status(t) != ticket.ReadyToApprove {
+				log, _ := os.ReadFile(filepath.Join(res.RunDir, "log.jsonl"))
+				t.Errorf("res = %+v\n%s", res, log)
+			}
+			if !tc.gate && (res.Reason != "invalid-output" || f.runner.calls["p3-prepare"] != 2) {
+				t.Errorf("観点表にない ID で止まっていない: %+v", res)
+			}
+		})
+	}
+	// 列の定義に合わない観点表は、誤りにする
+	f := newFlow(t, flowTicket, map[string][]string{"p2-review": {p2Approved}, "p3-prepare": {p3Done}})
+	os.WriteFile(filepath.Join(f.root, ".gateflow", "viewpoints.csv"), []byte("ID,観点\nVP-01,x\n"), 0o644)
+	if _, err := f.e.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "確認の方法") {
+		t.Errorf("err = %v", err)
+	}
+}

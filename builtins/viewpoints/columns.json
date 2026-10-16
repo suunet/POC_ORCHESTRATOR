@@ -1,0 +1,6 @@
+{
+  "idColumn": "ID",
+  "required": ["ID", "観点", "確認の方法"],
+  "methodColumn": "確認の方法",
+  "methods": ["関数", "画面"]
+}

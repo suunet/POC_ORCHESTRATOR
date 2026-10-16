@@ -16,6 +16,7 @@ func TestFS_Frames(t *testing.T) {
 		"prompts/policies/test-first.md",
 		"prompts/personas/dev.md",
 		"prompts/instructions/p5-test.md",
+		"viewpoints/columns.json",
 		"prompts/instructions/p5-implement.md",
 		"prompts/personas/bj.md",
 		"prompts/instructions/p2-review.md",

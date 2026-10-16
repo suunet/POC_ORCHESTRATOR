@@ -23,6 +23,7 @@ import (
 	"gateflow/internal/output"
 	"gateflow/internal/prompt"
 	"gateflow/internal/ticket"
+	"gateflow/internal/viewpoints"
 )
 
 // 出力の形が違うときの再実行の回数（設計：1回だけ再実行する）。
@@ -48,6 +49,20 @@ var stepDefs = map[string]stepDef{
 		r, err := output.ParseP3(d, e.Ticket.Kind == ticket.KindInfrastructure, len(e.p3IMO))
 		if err != nil {
 			return "", err
+		}
+		// 観点表があれば、テストケースが挙げた ID のうち、受入条件やカタログの ID の形でないものは観点表にあること（M3）
+		if e.viewpoints != nil {
+			var errs []error
+			for i, tc := range r.TestCases {
+				for _, id := range tc.Targets {
+					if !output.IsAcceptanceID(id) && !e.Rules.Matches(id) && !e.viewpoints.Has(id) {
+						errs = append(errs, fmt.Errorf("testCases[%d].targets の %q は観点表（%s）にない", i, id, viewpoints.ProjectFile))
+					}
+				}
+			}
+			if len(errs) > 0 {
+				return "", fmt.Errorf("出力の内容が正しくない:\n%w", errors.Join(errs...))
+			}
 		}
 		e.lastP3 = r
 		return r.Outcome, nil
@@ -503,6 +518,16 @@ func (e *Engine) inputs(ctx context.Context, st *State, step, dir string) ([]con
 			return nil, nil, err
 		}
 		e.p3IMO = imo
+		vp, vpKnowledge, err := e.viewpointsInput(dir)
+		if err != nil {
+			return nil, nil, err
+		}
+		e.viewpoints = nil
+		if vp != nil {
+			e.viewpoints = vp
+			mounts = append(mounts, bind(filepath.Join(dir, "viewpoints.csv"), "/in/viewpoints.csv"))
+			knowledge = append(knowledge, vpKnowledge)
+		}
 		if k := touchMapKnowledge(e.Project.TouchMap); k != "" {
 			knowledge = append(knowledge, k)
 		}
@@ -758,4 +783,31 @@ func hostOSName(goos string) string {
 		return "Windows"
 	}
 	return goos
+}
+
+// viewpointsInput は、プロジェクトの観点表（.gateflow/viewpoints.csv）を列の定義に照らして読み、step の記録へ写す（M3）。
+// なければ観点表の処理を飛ばす（nil）。列の定義に合わなければ誤り。
+func (e *Engine) viewpointsInput(dir string) (*viewpoints.Table, string, error) {
+	data, err := os.ReadFile(filepath.Join(e.Root, filepath.FromSlash(viewpoints.ProjectFile)))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, "", nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	cols, err := viewpoints.LoadColumns(e.Builtins)
+	if err != nil {
+		return nil, "", err
+	}
+	t, err := viewpoints.Parse(data, cols)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "viewpoints.csv"), data, 0o644); err != nil {
+		return nil, "", err
+	}
+	k := fmt.Sprintf("観点表（%d 件）は`/in/viewpoints.csv`（必須の列：%s。%s は %s）。チケットが触れる項目ごとに当てはまる観点を選んでテストケースを作り、"+
+		"testCases の targets に観点の ID を書く（観点表にない ID は出力の誤り）。観点の雛形の値（最大文字数など）が要件から埋められなければ unfilled に書く",
+		t.Rows, strings.Join(cols.Required, "・"), cols.MethodColumn, strings.Join(cols.Methods, "・"))
+	return t, k, nil
 }
