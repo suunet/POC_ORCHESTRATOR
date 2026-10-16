@@ -439,8 +439,9 @@ func (ids *IDs) validate() []error {
 		seen[pre.Prefix] = true
 		if _, err := regexp.Compile(pre.Pattern); err != nil {
 			errs = append(errs, fmt.Errorf("%s: pattern %q が正規表現として正しくない", at, pre.Pattern))
-		} else if !strings.HasPrefix(pre.Pattern, pre.Prefix+"-") {
-			errs = append(errs, fmt.Errorf("%s: pattern %q が %q で始まっていない", at, pre.Pattern, pre.Prefix+"-"))
+		} else if !strings.HasPrefix(pre.Pattern, pre.Prefix+"-") && !strings.Contains(pre.Pattern, "-"+pre.Prefix+"-") {
+			// 親の ID に続く形（受入条件の UC-NNN-AC-NN。M3）は、途中に prefix の区切りがあればよい
+			errs = append(errs, fmt.Errorf("%s: pattern %q が %q で始まらず、途中にも %q がない", at, pre.Pattern, pre.Prefix+"-", "-"+pre.Prefix+"-"))
 		}
 		if len(pre.Files) == 0 {
 			errs = append(errs, fmt.Errorf("%s: files がない", at))

@@ -36,6 +36,7 @@ const validProject = `{
     "prefixes": [
       {"prefix": "ACT", "pattern": "ACT-[0-9]{2}", "files": [".docs/design/actor.md"], "find": "table-first-column", "nameColumn": "アクター"},
       {"prefix": "UC", "pattern": "UC-[0-9]{3}", "files": [".docs/design/buc.md"], "find": "table-column:UC"},
+      {"prefix": "AC", "pattern": "UC-[0-9]{3}-AC-[0-9]{2}", "files": [".docs/design/uc/*.md"], "find": "table-first-column", "methodColumn": "確認の方法"},
       {"prefix": "STM", "pattern": "STM-[0-9]{2}", "files": [".docs/design/state.md"], "find": "table-first-column", "nameColumn": "状態モデル",
        "children": {"separator": ".", "files": [".docs/design/state.md"], "parentColumn": "状態モデル", "nameColumn": "状態"}}
     ]
@@ -84,7 +85,7 @@ func TestLoadProject_Valid(t *testing.T) {
 	if p.Verify.Build != "go build ./..." || p.Verify.Test != "go test ./..." || p.Verify.Lint != "go vet ./..." {
 		t.Errorf("verify = %+v", p.Verify)
 	}
-	if len(p.IDs.Prefixes) != 3 || p.IDs.Prefixes[1].FindColumn() != "UC" || p.IDs.Prefixes[2].Children == nil {
+	if len(p.IDs.Prefixes) != 4 || p.IDs.Prefixes[1].FindColumn() != "UC" || p.IDs.Prefixes[2].MethodColumn != "確認の方法" || p.IDs.Prefixes[3].Children == nil {
 		t.Errorf("ids = %+v", p.IDs)
 	}
 	if p.Policies[0].Path != ".docs/operations/policies/coding.md" {
