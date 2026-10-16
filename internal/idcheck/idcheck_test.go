@@ -3,6 +3,7 @@ package idcheck_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -359,5 +360,40 @@ func TestRun_Levels(t *testing.T) {
 		if (f.Kind == idcheck.KindUndefined && f.Level != idcheck.Recommended) || (f.Kind == idcheck.KindUnreferenced && f.Level != idcheck.Required) {
 			t.Errorf("%s の %s のレベル = %s", f.ID, f.Kind, f.Level)
 		}
+	}
+}
+
+// テストの置き場の下は参照を探す範囲に入る：テストが引く受入条件は「参照されていない」にならず、
+// ない受入条件を引くテストは未定義の参照になる。テストの中の表は定義として読まない（M3）。
+func TestRun_TestsAreReferences(t *testing.T) {
+	cfg := testConfig()
+	cfg.Tests = []string{"tests"}
+	cfg.Prefixes = append(cfg.Prefixes, config.Prefix{Prefix: "AC", Pattern: "UC-[0-9]{3}-AC-[0-9]{2}", Files: []string{"docs/uc/*.md"},
+		Find: "table-first-column", MethodColumn: "確認の方法"})
+	files := baseFiles()
+	files["docs/uc/UC-002.md"] = "# UC-002\n\n| ID | 期待 | 確認の方法 |\n|---|---|---|\n| UC-002-AC-01 | a | シナリオテスト |\n"
+	files["tests/a_test.go"] = "package a\n\n// UC-002-AC-01\nfunc TestA(t *testing.T) {}\n\n// UC-002-AC-09\nfunc TestB(t *testing.T) {}\n"
+	files["tests/table.md"] = "| ID |\n|---|\n| UC-002-AC-08 |\n"
+	res, err := idcheck.Run(writeFiles(t, files), mustRules(t, cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unref, undef []string
+	for _, f := range res.Findings {
+		switch f.Kind {
+		case idcheck.KindUnreferenced:
+			unref = append(unref, f.ID)
+		case idcheck.KindUndefined:
+			undef = append(undef, f.ID+"@"+f.File)
+		}
+	}
+	if slices.Contains(unref, "UC-002-AC-01") {
+		t.Errorf("テストが引く受入条件が、参照されていないになった: %v", unref)
+	}
+	if strings.Join(undef, ",") != "UC-002-AC-09@tests/a_test.go,UC-002-AC-08@tests/table.md" && strings.Join(undef, ",") != "UC-002-AC-08@tests/table.md,UC-002-AC-09@tests/a_test.go" {
+		t.Errorf("未定義の参照 = %v", undef)
+	}
+	if res.Defined("UC-002-AC-08") {
+		t.Error("テストの置き場の表を定義として読んだ")
 	}
 }

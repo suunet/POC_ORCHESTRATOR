@@ -436,6 +436,24 @@ func (c *checker) scanFiles() ([]string, error) {
 			return nil, err
 		}
 	}
+	// テストの置き場の下も参照を探す範囲に入れる（テストは受入条件の正当な参照の場所。定義としては読まない。M3）
+	for _, dir := range c.cfg.Tests {
+		abs := filepath.Join(c.root, filepath.FromSlash(dir))
+		if _, err := os.Stat(abs); errors.Is(err, fs.ErrNotExist) {
+			continue // テストがまだない
+		}
+		err := filepath.WalkDir(abs, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			rel, _ := filepath.Rel(c.root, path)
+			set[filepath.ToSlash(rel)] = true
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("テストの置き場 %s を読めない: %w", dir, err)
+		}
+	}
 	var out []string
 	for f := range set {
 		out = append(out, f)
