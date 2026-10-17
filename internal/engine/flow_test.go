@@ -1013,3 +1013,23 @@ func TestRun_ViewpointsToP3(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+// ids.tests があれば、守るのはその下のファイルだけ。p5-test が置いた空の型（プロダクトのコード）を p5-implement が
+// 埋めても止めない。テストの置き場の下が変われば止める（M3.2）。
+func TestRun_TestModifiedOnlyGuardsTestsDir(t *testing.T) {
+	f := newFlow(t, testedTicket(t), map[string][]string{"p5-test": {p5TestDone}, "p5-implement": {p5Done}, "p5-verify": {vApproved}})
+	f.e.Project.IDs = &config.IDs{Tests: []string{"backend/tests"}}
+	f.ws.testsChanged = []string{"backend/svc.go", "backend/healthcheck/module.go"}
+	res := mustRun(t, f)
+	if f.status(t) != ticket.ReadyForReview {
+		t.Fatalf("空の型を埋めただけで止まった: %+v", res)
+	}
+
+	g := newFlow(t, testedTicket(t), map[string][]string{"p5-test": {p5TestDone}, "p5-implement": {p5Done}, "p5-verify": {vApproved}})
+	g.e.Project.IDs = &config.IDs{Tests: []string{"backend/tests/"}}
+	g.ws.testsChanged = []string{"backend/svc.go", "backend/tests/scenario/log_test.go"}
+	res = mustRun(t, g)
+	if res.Reason != "test-modified" || !strings.Contains(res.Message, "log_test.go") || strings.Contains(res.Message, "svc.go") {
+		t.Fatalf("テストの置き場の下の変更で止まっていない、または空の型まで挙げている: %+v", res)
+	}
+}

@@ -156,24 +156,42 @@ const stopTestModified = "test-modified"
 // checkTestsUnchanged は、p5-test のコミットで書いたファイルを、p5-implement の後の作業ツリーと比べる（M3）。
 // 変わって（消されて）いれば、テストを書き換えて通そうとした恐れがあるので、人の確認待ちで止める。テストのファイルを足すのはよい。
 func (e *Engine) checkTestsUnchanged(ctx context.Context, st *State) error {
-	var changed []string
+	var changed, ignored []string
 	for _, c := range st.TestCommits {
 		files, err := e.Workspace.TestsChanged(ctx, e.Ticket.ID, c)
 		if err != nil {
 			return err
 		}
 		for _, f := range files {
-			if !slices.Contains(changed, f) {
-				changed = append(changed, f)
+			list := &changed
+			if !e.guardedTestFile(f) {
+				list = &ignored // p5-test が置いた空の型（プロダクトのコード）。中身は p5-implement が入れてよい（M3.2）
+			}
+			if !slices.Contains(*list, f) {
+				*list = append(*list, f)
 			}
 		}
 	}
-	e.log("check-tests-unchanged", map[string]any{"commits": st.TestCommits, "changed": changed})
+	e.log("check-tests-unchanged", map[string]any{"commits": st.TestCommits, "changed": changed, "ignored": ignored})
 	if len(changed) > 0 {
 		return &errStop{reason: stopTestModified, detail: "p5-implement が、p5-test で書いたテストのファイルを変えた（消した）：" + strings.Join(changed, "、") +
 			"。テストの誤りなら test_defect で報告する決まり。変更を確かめて、人が決める"}
 	}
 	return nil
+}
+
+// guardedTestFile は、テストの書き換えの検査で守るファイルか（ids.tests の下のファイル。ids.tests がなければすべて。M3.2）。
+func (e *Engine) guardedTestFile(f string) bool {
+	if e.Project.IDs == nil || len(e.Project.IDs.Tests) == 0 {
+		return true
+	}
+	for _, dir := range e.Project.IDs.Tests {
+		d := strings.TrimSuffix(filepath.ToSlash(dir), "/") + "/"
+		if strings.HasPrefix(f, d) {
+			return true
+		}
+	}
+	return false
 }
 
 // exportForCheck は、検査のために clone のコミット済みの版を実行の記録の下に書き出す（Q-07）。

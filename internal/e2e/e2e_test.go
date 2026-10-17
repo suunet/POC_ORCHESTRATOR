@@ -528,3 +528,36 @@ func TestE2E_SharedServices(t *testing.T) {
 		t.Error("services down の後に専用のネットワークが残っている")
 	}
 }
+
+// M3.2：p5-test がテスト（ids.tests の下）とプロダクトのコードの空の型を置き、p5-implement が空の型だけを埋めても、
+// test-modified で止めずにレビュー待ちまで進む。
+func TestE2E_StubFilledDoesNotStop(t *testing.T) {
+	e := setup(t)
+	e.write(".gateflow/project.json", strings.Replace(projectJSON, `"tests": ["calc"]`, `"tests": ["tests"]`, 1))
+	e.write("tests/add_test.go", "package tests\n\nimport (\n\t\"testing\"\n\n\t\"example.com/e2e/calc\"\n)\n\n// UC-001-AC-01\nfunc TestAdd(t *testing.T) {\n\tif calc.Add(1, 2) != 3 {\n\t\tt.Fatal(\"Add\")\n\t}\n}\n")
+	e.git("add", "-A")
+	e.git("commit", "-q", "-m", "chore: テストの置き場を分ける")
+	e.ticket("T-005", ticketBody("T-005", "Mul を足す", "ready-to-implement", "UC-001", planFor("TestMul", "UC-001-AC-01")))
+	sc := e.scenario("t005", map[string][]map[string]any{
+		"p5-test": {{"result": map[string]any{"outcome": "done", "summary": "テストと空の型を置いた",
+			"tests": []map[string]any{{"test": "TestMul", "file": "tests/mul_test.go", "acceptance": []string{"UC-001-AC-01"}}}},
+			"files": map[string]string{
+				"tests/mul_test.go": "package tests\n\nimport (\n\t\"testing\"\n\n\t\"example.com/e2e/calc\"\n)\n\n// UC-001-AC-01\nfunc TestMul(t *testing.T) {\n\tif calc.Mul(6, 3) != 18 {\n\t\tt.Fatal(\"Mul\")\n\t}\n}\n",
+				"calc/mul.go":       "package calc\n\n// Mul は掛け算をする（空の型。中身は p5-implement が入れる）。\nfunc Mul(a, b int) int { return 0 }\n",
+			}}},
+		"p5-implement": {{"result": map[string]any{"outcome": "done", "summary": "空の型を埋めた", "verify": verifyOK},
+			"files": map[string]string{"calc/mul.go": "package calc\n\n// Mul は掛け算をする。\nfunc Mul(a, b int) int { return a * b }\n"}}},
+		"p5-verify": {res(map[string]any{"outcome": "approved", "summary": "突き合わせた"})},
+	})
+	e.gateflow(sc, "run", "T-005")
+	if s := e.status("T-005"); s != "ready-for-review" {
+		t.Fatalf("ステータス = %s、止まった理由 %+v", s, e.state("T-005").Stopped)
+	}
+	ev := e.events("T-005", "check-tests-unchanged")
+	if len(ev) != 1 || ev[0]["changed"] != nil || !strings.Contains(fmt.Sprint(ev[0]["ignored"]), "calc/mul.go") {
+		t.Errorf("check-tests-unchanged = %v（空の型は守る対象の外、テストは変わっていない）", ev)
+	}
+	if red := e.events("T-005", "red"); len(red) != 1 || red[0]["exitCode"] == float64(0) {
+		t.Errorf("red の確かめ = %v（空の型ではテストが失敗する）", red)
+	}
+}
